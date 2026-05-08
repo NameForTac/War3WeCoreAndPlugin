@@ -177,7 +177,7 @@ QImage read_blp(const std::vector<uint8_t>& data) {
 // ============================================================
 #include <StormLib.h>
 
-// Convert narrow string to wide (Windows TCHAR)
+// Convert narrow string to wide (Windows TCHAR, UNICODE defined)
 static std::wstring to_w(const std::string& s) {
     if (s.empty()) return {};
     int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
@@ -198,35 +198,64 @@ QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_
         mpq_file += '/';
     mpq_file += "war3.mpq";
 
+    static bool warned = false;
+
+    // Helper lambda: try opening an MPQ with various approaches
+    auto try_open_mpq = [&](const std::string& path, DWORD extra_flags, HANDLE* ph) -> bool {
+        std::wstring wpath = to_w(path);
+        return SFileOpenArchive(wpath.c_str(), 0, MPQ_OPEN_READ_ONLY | extra_flags, ph);
+    };
+
     HANDLE hMpq = nullptr;
-    DWORD err_war3 = ERROR_SUCCESS;
-    if (!SFileOpenArchive(to_w(mpq_file).c_str(), 0, MPQ_OPEN_READ_ONLY, &hMpq)) {
-        err_war3 = GetLastError();
-        // Try War3x.mpq as fallback
+    if (!try_open_mpq(mpq_file, 0, &hMpq)) {
+        DWORD err_war3 = GetLastError();
+
+        // Make a backslash version of the path
+        std::string mpq_file_bs = mpq_file;
+        for (auto& c : mpq_file_bs) if (c == '/') c = '\\';
+
+        // Try with MPQ_OPEN_FORCE_MPQ_V1 (no bitmap)
+        if (!try_open_mpq(mpq_file, MPQ_OPEN_FORCE_MPQ_V1, &hMpq)) {
+            DWORD err_v1 = GetLastError();
+
+            // Try with backslashes
+            if (!try_open_mpq(mpq_file_bs, 0, &hMpq)) {
+                DWORD err_bs = GetLastError();
+
+                // Try with backslashes + FORCE_MPQ_V1
+                if (!try_open_mpq(mpq_file_bs, MPQ_OPEN_FORCE_MPQ_V1, &hMpq)) {
+                    if (!warned) {
+                        // CreateFileW diagnostic for war3.mpq
+                        HANDLE hTestW = CreateFileW(to_w(mpq_file).c_str(), GENERIC_READ,
+                                                    FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+                        DWORD w_err = GetLastError();
+                        bool w_ok = (hTestW != INVALID_HANDLE_VALUE);
+                        if (hTestW != INVALID_HANDLE_VALUE) CloseHandle(hTestW);
+
+                        qWarning().noquote()
+                            << QStringLiteral("[BLP] war3.mpq: err=%1 v1=%2 bs=%3 bsv1=%4 CreateFileW=%5")
+                                   .arg(err_war3).arg(err_v1).arg(err_bs).arg(err_bs)
+                                   .arg(w_ok ? "ok" : QString::number(w_err));
+                    }
+                    warned = true;
+                    return {};
+                }
+            }
+        }
+    }
+
+    // Try War3x.mpq as fallback if we didn't open war3.mpq
+    if (hMpq == nullptr) {
         mpq_file = wc3_data_dir;
         if (!mpq_file.empty() && mpq_file.back() != '/' && mpq_file.back() != '\\')
             mpq_file += '/';
         mpq_file += "War3x.mpq";
-        DWORD err_war3x = ERROR_SUCCESS;
-        if (!SFileOpenArchive(to_w(mpq_file).c_str(), 0, MPQ_OPEN_READ_ONLY, &hMpq)) {
-            err_war3x = GetLastError();
-            static bool warned = false;
+        if (!try_open_mpq(mpq_file, 0, &hMpq)) {
+            DWORD err_war3x = GetLastError();
             if (!warned) {
-                // Check if the files actually exist on disk
-                std::string war3_path = wc3_data_dir;
-                if (!war3_path.empty() && war3_path.back() != '/' && war3_path.back() != '\\')
-                    war3_path += '/';
-                war3_path += "war3.mpq";
-                std::string war3x_path = wc3_data_dir;
-                if (!war3x_path.empty() && war3x_path.back() != '/' && war3x_path.back() != '\\')
-                    war3x_path += '/';
-                war3x_path += "War3x.mpq";
-                bool war3_disk = (GetFileAttributesW(to_w(war3_path).c_str()) != INVALID_FILE_ATTRIBUTES);
-                bool war3x_disk = (GetFileAttributesW(to_w(war3x_path).c_str()) != INVALID_FILE_ATTRIBUTES);
                 qWarning().noquote()
-                    << QStringLiteral("[BLP] MPQ open: war3.mpq exists=%1 err=%2 | War3x.mpq exists=%3 err=%4")
-                           .arg(war3_disk ? "yes" : "no").arg(err_war3)
-                           .arg(war3x_disk ? "yes" : "no").arg(err_war3x);
+                    << QStringLiteral("[BLP] War3x.mpq also failed err=%1").arg(err_war3x);
                 warned = true;
             }
             return {};
