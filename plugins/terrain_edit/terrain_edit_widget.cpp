@@ -1,6 +1,7 @@
 #include "terrain_edit_widget.h"
 #include <QOpenGLContext>
 #include <QPainter>
+#include <QDebug>
 #include <QtMath>
 #include <QApplication>
 #include <algorithm>
@@ -345,12 +346,15 @@ void TerrainEditWidget::uploadTextures() {
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, kTexSize_, kTexSize_, tex_count_,
                  0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
 
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     for (int i = 0; i < tex_count_; ++i) {
         QString id = QString::fromStdString(terrain_->ground_tiles[i]);
         QImage img = generateTileTexture(id, i);
+        if (img.isNull()) continue;
         glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i,
                         kTexSize_, kTexSize_, 1, GL_RGB, GL_UNSIGNED_BYTE, img.bits());
     }
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -650,8 +654,8 @@ void TerrainEditWidget::paintGL() {
     // Light direction (fixed world-space, from upper-right-front)
     glUniform3f(u_light_dir_, 0.5f, 0.8f, 0.3f);
 
-    // Texture setup
-    bool useTex = show_texture_ && tex_array_ > 0;
+    // Texture setup (with bounds safety)
+    bool useTex = show_texture_ && tex_array_ > 0 && tex_count_ > 0;
     glUniform1f(u_use_tex_, useTex ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(program_, "u_tex_tile"), kTileSize);
     if (tex_array_) {
