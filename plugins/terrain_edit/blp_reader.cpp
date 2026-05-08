@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <QDebug>
 #include <QFile>
-#include "../../src/core/archive.h"
+#include <windows.h>
 
 // ============================================================
 // BLP1 decoder
@@ -173,8 +173,40 @@ QImage read_blp(const std::vector<uint8_t>& data) {
 }
 
 // ============================================================
-// Load a texture from War3.mpq using Archive (core lib wrapper)
+// Load a texture from War3.mpq using StormLib (via LoadLibrary)
 // ============================================================
+
+// StormLib function pointer types
+typedef bool (WINAPI *SFOpenArchive_t)(const char*, DWORD, DWORD, HANDLE*);
+typedef bool (WINAPI *SFFileExists_t)(HANDLE, const char*, DWORD);
+typedef bool (WINAPI *SFOpenFileEx_t)(HANDLE, const char*, DWORD, HANDLE*);
+typedef DWORD (WINAPI *SFGetFileSize_t)(HANDLE, DWORD*);
+typedef bool (WINAPI *SFReadFile_t)(HANDLE, void*, DWORD, DWORD*, LPOVERLAPPED);
+typedef bool (WINAPI *SFCloseArchive_t)(HANDLE);
+typedef bool (WINAPI *SFCloseFile_t)(HANDLE);
+
+// Load all StormLib functions via GetProcAddress so TCHAR mismatch is irrelevant
+static HMODULE s_storm_lib = nullptr;
+static SFOpenArchive_t   s_SFileOpenArchive   = nullptr;
+static SFOpenFileEx_t    s_SFileOpenFileEx    = nullptr;
+static SFGetFileSize_t   s_SFileGetFileSize   = nullptr;
+static SFReadFile_t      s_SFileReadFile      = nullptr;
+static SFCloseArchive_t  s_SFileCloseArchive  = nullptr;
+static SFCloseFile_t     s_SFileCloseFile     = nullptr;
+
+static bool ensure_stormlib_loaded() {
+    if (s_storm_lib) return true;
+    s_storm_lib = LoadLibraryW(L"libStormLib.dll");
+    if (!s_storm_lib) return false;
+    s_SFileOpenArchive  = (SFOpenArchive_t) GetProcAddress(s_storm_lib, "SFileOpenArchive");
+    s_SFileOpenFileEx   = (SFOpenFileEx_t)    GetProcAddress(s_storm_lib, "SFileOpenFileEx");
+    s_SFileGetFileSize  = (SFGetFileSize_t)   GetProcAddress(s_storm_lib, "SFileGetFileSize");
+    s_SFileReadFile     = (SFReadFile_t)      GetProcAddress(s_storm_lib, "SFileReadFile");
+    s_SFileCloseArchive = (SFCloseArchive_t)  GetProcAddress(s_storm_lib, "SFileCloseArchive");
+    s_SFileCloseFile    = (SFCloseFile_t)     GetProcAddress(s_storm_lib, "SFileCloseFile");
+    return (s_SFileOpenArchive && s_SFileOpenFileEx && s_SFileGetFileSize &&
+            s_SFileReadFile && s_SFileCloseArchive && s_SFileCloseFile);
+}
 
 QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_path) {
     if (wc3_data_dir.empty()) {
@@ -182,37 +214,48 @@ QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_
         return {};
     }
 
-    // Build path to war3.mpq
+    if (!ensure_stormlib_loaded()) {
+        static bool warned = false;
+        if (!warned) { qWarning() << "[BLP] Cannot load libStormLib.dll"; warned = true; }
+        return {};
+    }
+
     auto build_path = [&](const std::string& file) -> std::string {
         std::string p = wc3_data_dir;
         if (!p.empty() && p.back() != '/' && p.back() != '\\')
             p += '/';
         p += file;
-        // Use backslashes for Windows
         for (auto& c : p) if (c == '/') c = '\\';
         return p;
     };
 
-    std::string mpq_file;
-    Archive archive;
-
-    // Try war3.mpq first
-    mpq_file = build_path("war3.mpq");
-    if (archive.open_read(mpq_file)) {
-        auto data = archive.read_file(mpq_path);
-        if (!data.empty()) {
-            QImage img = read_blp(data);
-            if (!img.isNull()) return img;
-        }
-    }
-
-    // Fallback to War3x.mpq
-    mpq_file = build_path("War3x.mpq");
-    if (archive.open_read(mpq_file)) {
-        auto data = archive.read_file(mpq_path);
-        if (!data.empty()) {
-            QImage img = read_blp(data);
-            if (!img.isNull()) return img;
+    // Try war3.mpq first, then War3x.mpq
+    const char* candidates[] = { "war3.mpq", "War3x.mpq" };
+    for (auto name : candidates) {
+        std::string mpq_file = build_path(name);
+        HANDLE hMpq = nullptr;
+        if (s_SFileOpenArchive(mpq_file.c_str(), 0, 0x100 /*MPQ_OPEN_READ_ONLY*/,
+                               &hMpq) && hMpq) {
+            HANDLE hFile = nullptr;
+            if (s_SFileOpenFileEx(hMpq, mpq_path.c_str(), 0, &hFile)) {
+                DWORD file_size = s_SFileGetFileSize(hFile, nullptr);
+                if (file_size > 0 && file_size != 0xFFFFFFFF) {
+                    std::vector<uint8_t> buf(file_size);
+                    DWORD read = 0;
+                    if (s_SFileReadFile(hFile, buf.data(), file_size, &read, nullptr) &&
+                        read == file_size) {
+                        s_SFileCloseFile(hFile);
+                        s_SFileCloseArchive(hMpq);
+                        QImage img = read_blp(buf);
+                        if (!img.isNull()) return img;
+                    } else {
+                        s_SFileCloseFile(hFile);
+                    }
+                } else {
+                    s_SFileCloseFile(hFile);
+                }
+            }
+            s_SFileCloseArchive(hMpq);
         }
     }
 
