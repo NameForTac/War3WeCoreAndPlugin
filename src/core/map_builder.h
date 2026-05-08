@@ -15,6 +15,8 @@
 #include <memory>
 #include <string>
 
+class Wc3Manager;
+
 // Progress callback: status message, current step, total steps
 using ProgressCallback = std::function<void(const std::string&, int, int)>;
 
@@ -40,6 +42,12 @@ public:
 
     // --- Source ---
     bool open_source(const std::string& path);
+
+    // --- WC3 resource manager ---
+    void set_wc3_manager(Wc3Manager* mgr) { wc3_mgr_ = mgr; }
+
+    // Read a file with map-first then WC3 fallback.
+    std::vector<uint8_t>    read_resource(const std::string& name);
 
     // --- Read ---
     MapInfo                 read_w3i();
@@ -76,4 +84,5 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     ProgressCallback progress_;
+    Wc3Manager* wc3_mgr_ = nullptr;
 };

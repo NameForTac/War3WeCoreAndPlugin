@@ -412,16 +412,16 @@ void TerrainEditWidget::uploadTextures() {
             }
         }
 
-        // 2) Fallback to WC3 war3.mpq
-        if (tile_images[i].isNull() && !wc3_data_dir_.empty()) {
+        // 2) Fallback to WC3 war3.mpq (via builder which has the Wc3Manager)
+        if (tile_images[i].isNull() && builder_) {
             QString mpqPath = tileIdToBlpPath(tileId);
             if (!mpqPath.isEmpty()) {
-                QImage blpImg = load_wc3_texture(wc3_data_dir_, mpqPath.toStdString());
-                if (!blpImg.isNull()) {
-                    tile_images[i] = blpImg.scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                                            .convertToFormat(QImage::Format_RGB888);
-                    ++loaded_from_blp;
-                    continue;
+                std::vector<uint8_t> raw = builder_->read_resource(mpqPath.toStdString());
+                if (!raw.empty()) {
+                    tile_images[i] = read_blp(raw)
+                        .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                        .convertToFormat(QImage::Format_RGB888);
+                    if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
                 }
             }
         }

@@ -151,11 +151,17 @@ void MainWindow::create_widgets() {
     // Load DLL plugins
     reg.load_directory(plugin_dir_);
 
+    // Init WC3 resource manager
+    if (!wc3_data_dir_.isEmpty())
+        wc3_manager_.initialize(wc3_data_dir_.toStdString());
+    builder_->set_wc3_manager(&wc3_manager_);
+
     // Init all plugins (compiled-in + DLL)
     PluginContext ctx;
     ctx.builder = builder_.get();
     ctx.meta_db = &meta_db_;
     ctx.parent_widget = this;
+    ctx.wc3 = &wc3_manager_;
     ctx.wc3_data_dir = wc3_data_dir_.toStdString();
     reg.init_all(ctx);
 
@@ -416,11 +422,13 @@ void MainWindow::on_settings() {
         QString new_plugin_dir = dlg.plugin_directory();
         QString new_wc3_dir = dlg.wc3_data_directory();
 
-        // Reload WC3 metadata if directory changed
+        // Reload WC3 resources if directory changed
         if (new_wc3_dir != wc3_data_dir_) {
             wc3_data_dir_ = new_wc3_dir;
+            wc3_manager_.close();
             meta_db_ = MetaDataDB{}; // reset
             if (!wc3_data_dir_.isEmpty()) {
+                wc3_manager_.initialize(wc3_data_dir_.toStdString());
                 meta_db_.load_data_dir(wc3_data_dir_.toStdString());
             }
         }
@@ -452,6 +460,8 @@ void MainWindow::on_settings() {
             ctx.builder = builder_.get();
             ctx.meta_db = &meta_db_;
             ctx.parent_widget = this;
+            ctx.wc3 = &wc3_manager_;
+            ctx.wc3_data_dir = wc3_data_dir_.toStdString();
             reg.init_all(ctx);
 
             for (size_t i = 0; i < reg.count(); ++i) {

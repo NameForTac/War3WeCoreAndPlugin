@@ -4,6 +4,8 @@
 #include "terrain_edit_types.h"
 #include "../../src/core/w3e.h"
 
+class Wc3Manager;
+
 class TerrainEditWidget;
 class MapBuilder;
 class QSlider;
@@ -23,7 +25,7 @@ public:
     void onMapClosed();
     void syncToBuilder(MapBuilder* builder);
     bool isModified() const { return modified_; }
-    void setWc3DataDir(const QString& dir) { wc3_data_dir_ = dir; }
+    void setWc3Manager(Wc3Manager* mgr) { wc3_ = mgr; }
 
 signals:
     void contentChanged();
@@ -76,5 +78,5 @@ private:
     Terrain terrain_;
     MapBuilder* builder_ = nullptr;
     bool has_terrain_ = false;
-    QString wc3_data_dir_;
+    Wc3Manager* wc3_ = nullptr;
 };

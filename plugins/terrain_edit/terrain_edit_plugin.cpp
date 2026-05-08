@@ -24,7 +24,7 @@ bool TerrainEditPlugin::init(PluginContext& ctx) {
     }
 
     window_ = new TerrainEditWindow(ctx.parent_widget);
-    window_->setWc3DataDir(QString::fromStdString(ctx.wc3_data_dir));
+    window_->setWc3Manager(ctx.wc3);
     open_action_ = new QAction(tr("Terrain Editor..."), nullptr);
     QObject::connect(open_action_, &QAction::triggered, [this]() {
         if (window_) {

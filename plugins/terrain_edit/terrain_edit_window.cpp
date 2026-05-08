@@ -452,7 +452,7 @@ void TerrainEditWindow::onMapLoaded(MapBuilder* builder) {
         has_terrain_ = true;
         modified_ = false;
         widget_->setBuilder(builder_);
-        widget_->setWc3DataDir(wc3_data_dir_);
+        widget_->setWc3Manager(wc3_);
         widget_->loadTerrain(&terrain_);
         widget_->setShowTexture(show_texture_);
         updateTextureCombo();

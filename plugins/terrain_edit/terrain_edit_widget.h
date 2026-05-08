@@ -12,6 +12,8 @@
 #include "terrain_edit_types.h"
 #include "../../src/core/w3e.h"
 
+class Wc3Manager;
+
 class MapBuilder;
 
 class TerrainEditWidget : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
@@ -22,7 +24,7 @@ public:
 
     void loadTerrain(Terrain* terrain);
     void setBuilder(MapBuilder* builder) { builder_ = builder; }
-    void setWc3DataDir(const QString& dir) { wc3_data_dir_ = dir.toStdString(); tex_dirty_ = true; update(); }
+    void setWc3Manager(Wc3Manager* mgr) { wc3_ = mgr; tex_dirty_ = true; update(); }
 
     void setTool(EditTool tool) { current_tool_ = tool; update(); }
     void setBrushSize(int size) { brush_size_ = std::max(1, size); update(); }
@@ -93,7 +95,7 @@ private:
     // Terrain data (pointer to window's copy)
     Terrain* terrain_ = nullptr;
     MapBuilder* builder_ = nullptr;
-    std::string wc3_data_dir_;  // WC3 installation path, for loading real BLP textures
+    Wc3Manager* wc3_ = nullptr;
 
     // Camera
     float cam_yaw_ = -45.0f;

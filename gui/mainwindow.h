@@ -6,6 +6,7 @@
 #include "../src/core/map_builder.h"
 #include "../src/core/plugin_registry.h"
 #include "../src/core/metadata.h"
+#include "../src/core/wc3_manager.h"
 
 class QTabWidget;
 class QToolBar;
@@ -47,6 +48,7 @@ private:
     QString wc3_data_dir_;
 
     MetaDataDB meta_db_;
+    Wc3Manager wc3_manager_;
 
     QAction* open_action_ = nullptr;
     QAction* save_action_ = nullptr;

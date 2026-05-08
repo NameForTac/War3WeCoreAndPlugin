@@ -8,6 +8,7 @@
 
 class MapBuilder;
 class MetaDataDB;
+class Wc3Manager;
 
 // ============================================================
 // Plugin capabilities bitmask
@@ -36,9 +37,10 @@ struct PluginContext {
     MapBuilder* builder = nullptr;
     MetaDataDB*  meta_db = nullptr;
     QWidget*    parent_widget = nullptr;
-    // WC3 installation directory — used by plugins that need game assets (terrain textures, etc.)
-    // Empty string if not configured.
+    // WC3 installation directory (raw path — use for MetaDataDB etc.)
     std::string wc3_data_dir;
+    // WC3 resource manager — opens War3.mpq/War3x.mpq for reading game assets.
+    Wc3Manager* wc3 = nullptr;
 };
 
 // ============================================================

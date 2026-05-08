@@ -1,5 +1,6 @@
 #include "map_builder.h"
 #include "archive.h"
+#include "wc3_manager.h"
 #include "w3c.h"
 #include "w3r.h"
 #include "w3e.h"
@@ -205,6 +206,16 @@ SLKTable MapBuilder::read_slk(const std::string& file_name) {
 
 std::vector<uint8_t> MapBuilder::read_raw(const std::string& file_name) {
     return impl_->source->read_file(file_name);
+}
+
+std::vector<uint8_t> MapBuilder::read_resource(const std::string& name) {
+    // 1) Map archive first
+    if (impl_->source && impl_->source->has_file(name))
+        return impl_->source->read_file(name);
+    // 2) WC3 fallback (War3x.mpq → war3.mpq)
+    if (wc3_mgr_)
+        return wc3_mgr_->read_file(name);
+    return {};
 }
 
 int64_t MapBuilder::file_size(const std::string& file_name) {

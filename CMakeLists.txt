@@ -54,6 +54,7 @@ add_library(w3x_core STATIC
   src/core/map_builder.cpp
   src/core/metadata.cpp
   src/core/object_id_gen.cpp
+  src/core/wc3_manager.cpp
 )
 
 target_include_directories(w3x_core PUBLIC src)

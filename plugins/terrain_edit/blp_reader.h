@@ -16,7 +16,3 @@ struct BLPHeader {
 
 // Decode a BLP1 file from raw bytes into a QImage (largest mipmap level).
 QImage read_blp(const std::vector<uint8_t>& data);
-
-// Load a texture from a WC3 MPQ file path (e.g. "TerrainArt/LordaeronSummer/Ldrt.blp")
-// by opening the War3.mpq from the given WC3 data directory.
-QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_path);
