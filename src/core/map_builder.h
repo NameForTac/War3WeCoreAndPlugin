@@ -13,6 +13,10 @@
 
 #include <functional>
 #include <memory>
+#include <string>
+
+// Progress callback: status message, current step, total steps
+using ProgressCallback = std::function<void(const std::string&, int, int)>;
 
 // ============================================================
 // MapBuilder — orchestrator for map I/O
@@ -65,7 +69,11 @@ public:
     // --- Build ---
     bool save(const std::string& output_path, const BuildSettings& settings = {});
 
+    // --- Progress ---
+    void set_progress_callback(ProgressCallback cb);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    ProgressCallback progress_;
 };

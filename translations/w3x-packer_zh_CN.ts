@@ -253,6 +253,73 @@ Built with StormLib + Qt</source>
 
 基于 StormLib + Qt</translation>
     </message>
+    <message>
+        <location filename="../gui/mainwindow.cpp" line="233"/>
+        <source>Loading map...</source>
+        <translation>正在加载地图...</translation>
+    </message>
+    <message>
+        <location filename="../gui/mainwindow.cpp" line="242"/>
+        <source>Loading %1...</source>
+        <translation>正在加载 %1...</translation>
+    </message>
+    <message>
+        <location filename="../gui/mainwindow.cpp" line="268"/>
+        <source>Map loaded in %1 ms</source>
+        <translation>地图加载完成，耗时 %1 毫秒</translation>
+    </message>
+    <message>
+        <location filename="../gui/mainwindow.cpp" line="270"/>
+        <source>Map loaded in %1 s</source>
+        <translation>地图加载完成，耗时 %1 秒</translation>
+    </message>
+    <message>
+        <location filename="../gui/mainwindow.cpp" line="272"/>
+        <source>Load Complete</source>
+        <translation>加载完成</translation>
+    </message>
+    <message>
+        <location filename="../gui/mainwindow.cpp" line="316"/>
+        <location filename="../gui/mainwindow.cpp" line="353"/>
+        <source>Saving map...</source>
+        <translation>正在保存地图...</translation>
+    </message>
+</context>
+<context>
+    <name>FileBrowserPlugin</name>
+    <message>
+        <location filename="../gui/filebrowser.h" line="47"/>
+        <location filename="../gui/filebrowser.h" line="59"/>
+        <source>File Browser</source>
+        <translation>文件浏览</translation>
+    </message>
+</context>
+<context>
+    <name>MapInfoPlugin</name>
+    <message>
+        <location filename="../gui/mapinfopage.h" line="101"/>
+        <location filename="../gui/mapinfopage.h" line="112"/>
+        <source>Map Info</source>
+        <translation>地图信息</translation>
+    </message>
+</context>
+<context>
+    <name>ObjectEditorPlugin</name>
+    <message>
+        <location filename="../gui/objecteditor.h" line="100"/>
+        <location filename="../gui/objecteditor.h" line="111"/>
+        <source>Object Editor</source>
+        <translation>对象编辑</translation>
+    </message>
+</context>
+<context>
+    <name>TerrainEditorPlugin</name>
+    <message>
+        <location filename="../gui/terraineditor.h" line="83"/>
+        <location filename="../gui/terraineditor.h" line="95"/>
+        <source>Terrain Editor</source>
+        <translation>地形编辑</translation>
+    </message>
 </context>
 <context>
     <name>MapInfoPage</name>

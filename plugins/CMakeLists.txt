@@ -19,3 +19,31 @@ set_target_properties(sample_tab PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
 )
+
+# ── Terrain Edit Plugin (3D terrain editor with independent window) ──
+add_library(terrain_edit SHARED
+    terrain_edit/terrain_edit_plugin.cpp
+    terrain_edit/terrain_edit_window.cpp
+    terrain_edit/terrain_edit_widget.cpp
+)
+
+target_include_directories(terrain_edit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(terrain_edit PRIVATE w3x_core Qt::Widgets Qt::OpenGLWidgets)
+
+# Compile .ts → .qm using lrelease
+find_package(Qt6 REQUIRED COMPONENTS LinguistTools)
+add_custom_command(
+    OUTPUT "${CMAKE_BINARY_DIR}/plugins/terrain_edit_zh_CN.qm"
+    COMMAND Qt6::lrelease -compress
+        "${CMAKE_CURRENT_SOURCE_DIR}/terrain_edit/translations/terrain_edit_zh_CN.ts"
+        -qm "${CMAKE_BINARY_DIR}/plugins/terrain_edit_zh_CN.qm"
+    MAIN_DEPENDENCY terrain_edit/translations/terrain_edit_zh_CN.ts
+    COMMENT "Compiling plugin translations (zh_CN)"
+)
+# Add the generated .qm as a known source so Ninja tracks the dependency
+target_sources(terrain_edit PRIVATE "${CMAKE_BINARY_DIR}/plugins/terrain_edit_zh_CN.qm")
+
+set_target_properties(terrain_edit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+)

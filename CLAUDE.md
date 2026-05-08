@@ -159,6 +159,14 @@ w3x_packer dump  <input.w3x> <file>       # Hex dump MPQ 内指定文件
 - 构建默认不启用 GUI（`-DWITH_GUI=ON` 开启 Qt6 依赖）
 - Windows-only 代码（使用 `_mkdir`、`_chdir` 等 MSVC/MinGW CRT API）
 
+## i18n 约定
+
+- 插件级别的翻译存放在各自插件的 `translations/` 目录内，**不放入 core 或主程序 translations/**
+- 所有 UI 字符串必须使用 `tr()` 包裹
+- 新增字符串后，更新对应插件的 .ts 文件
+- CMake 使用 `lrelease` 自动编译 .ts → .qm，.qm 与插件 DLL 同目录输出
+- 插件在 `init()` 中通过 `QTranslator` 按系统 locale 自动加载对应翻译（fallback 到 zh_CN）
+
 ## 插件架构
 
 所有编辑器功能均为 `IEditorPlugin` 实现，MainWindow 不感知具体编辑器类型。

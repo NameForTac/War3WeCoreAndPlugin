@@ -22,7 +22,8 @@ int main(int argc, char* argv[]) {
     QString transDir = QApplication::applicationDirPath() + "/translations/";
     QString lang = QLocale::system().name(); // e.g. "zh_CN"
     bool loaded = appTranslator.load("w3x-packer_" + lang, transDir)
-               || appTranslator.load("w3x-packer_" + lang.left(2), transDir);
+               || appTranslator.load("w3x-packer_" + lang.left(2), transDir)
+               || appTranslator.load("w3x-packer_zh_CN", transDir);
     if (loaded)
         app.installTranslator(&appTranslator);
 

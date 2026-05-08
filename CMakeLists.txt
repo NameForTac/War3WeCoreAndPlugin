@@ -27,7 +27,12 @@ set(STORMLIB_BUILD_TESTING  OFF CACHE BOOL "" FORCE)
 # Build StormLib as a shared library (DLL)
 set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON CACHE BOOL "" FORCE)
+# ── Suppress StormLib warnings (third-party C code) ──
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
 FetchContent_MakeAvailable(stormlib)
+
+# Also apply to the target directly
+set_property(TARGET storm APPEND PROPERTY COMPILE_OPTIONS -w)
 
 # ============================================================
 # Library

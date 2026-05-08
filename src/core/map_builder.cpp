@@ -70,6 +70,10 @@ struct MapBuilder::Impl {
 MapBuilder::MapBuilder() : impl_(std::make_unique<Impl>()) {}
 MapBuilder::~MapBuilder() = default;
 
+void MapBuilder::set_progress_callback(ProgressCallback cb) {
+    progress_ = std::move(cb);
+}
+
 // --- Source ---
 
 bool MapBuilder::open_source(const std::string& path) {
@@ -252,7 +256,22 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
     struct SrcFile { std::string name; std::vector<uint8_t> data; };
     std::vector<SrcFile> src_files;
 
+    // Count total steps for progress reporting
+    int total_steps = (int)all_files.size();  // pre-read: one per source file
+    total_steps += 1;                          // write w3i
+    total_steps += (int)impl_->object_cache.size();
+    if (impl_->terrain_cache) total_steps++;
+    if (impl_->units_cache) total_steps++;
+    if (impl_->doodads_cache) total_steps++;
+    if (impl_->wts_cache) total_steps++;
+    if (!impl_->file_overrides.empty()) total_steps++;
+    total_steps += 1;  // write remaining source files
+    total_steps += 1;  // close archive
+    if (same_file) total_steps++;  // reopen
+    int step = 0;
+
     for (auto& name : all_files) {
+        if (progress_) progress_("Reading: " + name, ++step, total_steps);
         if (impl_->file_removals.find(name) != impl_->file_removals.end())
             continue;
         if (name == "war3map.w3i") continue;
@@ -311,6 +330,7 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
 
     // Write W3I
     {
+        if (progress_) progress_("Writing map info (w3i)", ++step, total_steps);
         auto map_info = read_w3i(); // uses cache
         Buffer buf;
         w3i::write(buf, map_info);
@@ -319,6 +339,7 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
 
     // Write object files
     for (auto& [name, obj] : impl_->object_cache) {
+        if (progress_) progress_("Writing: " + name, ++step, total_steps);
         Buffer buf;
         w3u::write(buf, obj);
         write_file(name, buf.take_data());
@@ -326,6 +347,7 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
 
     // Write terrain
     if (impl_->terrain_cache) {
+        if (progress_) progress_("Writing terrain (w3e)", ++step, total_steps);
         Buffer buf;
         w3e::write(buf, *impl_->terrain_cache);
         write_file("war3map.w3e", buf.take_data());
@@ -333,6 +355,7 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
 
     // Write placed units
     if (impl_->units_cache) {
+        if (progress_) progress_("Writing placed units", ++step, total_steps);
         Buffer buf;
         units_doo::write(buf, *impl_->units_cache);
         write_file("war3mapunits.doo", buf.take_data());
@@ -340,6 +363,7 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
 
     // Write placed doodads
     if (impl_->doodads_cache) {
+        if (progress_) progress_("Writing placed doodads", ++step, total_steps);
         Buffer buf;
         doo::write(buf, *impl_->doodads_cache);
         write_file("war3map.doo", buf.take_data());
@@ -347,17 +371,22 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
 
     // Write WTS
     if (impl_->wts_cache) {
+        if (progress_) progress_("Writing trigger strings (wts)", ++step, total_steps);
         auto text = wts::generate(*impl_->wts_cache);
         std::vector<uint8_t> data(text.begin(), text.end());
         write_file("war3map.wts", data);
     }
 
     // Write file overrides
+    if (!impl_->file_overrides.empty()) {
+        if (progress_) progress_("Writing file overrides", ++step, total_steps);
+    }
     for (auto& [name, data] : impl_->file_overrides) {
         write_file(name, data);
     }
 
     // Write pre-read source files (with name mapping for unnamed files)
+    if (progress_) progress_("Writing remaining source files", ++step, total_steps);
     for (auto& sf : src_files) {
         // Check if this is a StormLib pseudo-name (File000000NN.ext)
         auto filename = sf.name;
@@ -408,10 +437,12 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
     }
 
     // Close archive (finalizes MPQ)
+    if (progress_) progress_("Finalizing archive", ++step, total_steps);
     archive.close();
 
     // Reopen if we closed the source
     if (same_file) {
+        if (progress_) progress_("Reopening archive", ++step, total_steps);
         auto arc = std::make_unique<Archive>();
         if (arc->open_read(output_path))
             impl_->source = std::move(arc);

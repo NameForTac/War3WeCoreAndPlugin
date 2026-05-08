@@ -16,6 +16,8 @@
 #include <QSettings>
 #include <QStyle>
 #include <QApplication>
+#include <QProgressDialog>
+#include <QElapsedTimer>
 #include <direct.h>
 
 static void mkdir_recursive(const std::string& path) {
@@ -177,7 +179,8 @@ void MainWindow::create_widgets() {
     }
 
     // Add plugin menu actions
-    auto* plugin_menu = menuBar()->actions().at(3); // File, Tools, Plugins, Help
+    // menu order: File=0, Tools=1, Plugins=2, Help=3
+    auto* plugin_menu = menuBar()->actions().at(2);
     auto* pm = plugin_menu->menu();
     if (pm) {
         for (size_t i = 0; i < reg.count(); ++i) {
@@ -220,9 +223,30 @@ void MainWindow::load_all() {
     if (!builder_ || current_path_.isEmpty())
         return;
 
+    QElapsedTimer timer;
+    timer.start();
+
     try {
-        // Activate all plugins — each reads what it needs from the builder
-        PluginRegistry::instance().activate_all();
+        auto& reg = PluginRegistry::instance();
+        size_t plugin_count = reg.count();
+
+        // Show progress dialog while activating plugins
+        QProgressDialog progress(tr("Loading map..."), QString(), 0, (int)plugin_count, this);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(0);
+        progress.setValue(0);
+
+        for (size_t i = 0; i < plugin_count; ++i) {
+            auto* plugin = reg.get(i);
+            if (!plugin) continue;
+
+            QString label = tr("Loading %1...").arg(plugin->name());
+            progress.setLabelText(label);
+            progress.setValue((int)i + 1);
+            QApplication::processEvents();
+
+            plugin->activate();
+        }
 
         // Enable all tabs
         for (int i = 0; i < tabs_->count(); ++i)
@@ -236,7 +260,17 @@ void MainWindow::load_all() {
     } catch (const std::exception& e) {
         QMessageBox::warning(this, tr("Error"),
             tr("Failed to load map: %1").arg(e.what()));
+        return;
     }
+
+    qint64 elapsed_ms = timer.elapsed();
+    QString msg;
+    if (elapsed_ms < 1000)
+        msg = tr("Map loaded in %1 ms").arg(elapsed_ms);
+    else
+        msg = tr("Map loaded in %1 s")
+            .arg(elapsed_ms / 1000.0, 0, 'f', 1);
+    QMessageBox::information(this, tr("Load Complete"), msg);
 }
 
 void MainWindow::on_open() {
@@ -279,9 +313,27 @@ void MainWindow::on_save() {
     // Sync all NeedsSavable plugins to the builder
     PluginRegistry::instance().sync_all();
 
+    // Show progress dialog during save
+    QProgressDialog progress(tr("Saving map..."), QString(), 0, 1, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+
+    builder_->set_progress_callback(
+        [&](const std::string& msg, int cur, int total) {
+            progress.setLabelText(QString::fromStdString(msg));
+            progress.setMaximum(total);
+            progress.setValue(cur);
+            QApplication::processEvents();
+        });
+
     BuildSettings s = settings_;
 
-    if (builder_->save(current_path_.toLocal8Bit().toStdString(), s)) {
+    bool ok = builder_->save(current_path_.toLocal8Bit().toStdString(), s);
+
+    builder_->set_progress_callback(nullptr);
+
+    if (ok) {
         modified_ = false;
         statusBar()->showMessage(tr("Saved successfully"));
     } else {
@@ -298,9 +350,27 @@ void MainWindow::on_save_as() {
     // Sync all NeedsSavable plugins to the builder
     PluginRegistry::instance().sync_all();
 
+    // Show progress dialog during save
+    QProgressDialog progress(tr("Saving map..."), QString(), 0, 1, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setValue(0);
+
+    builder_->set_progress_callback(
+        [&](const std::string& msg, int cur, int total) {
+            progress.setLabelText(QString::fromStdString(msg));
+            progress.setMaximum(total);
+            progress.setValue(cur);
+            QApplication::processEvents();
+        });
+
     BuildSettings s = settings_;
 
-    if (builder_->save(path.toLocal8Bit().toStdString(), s)) {
+    bool ok = builder_->save(path.toLocal8Bit().toStdString(), s);
+
+    builder_->set_progress_callback(nullptr);
+
+    if (ok) {
         modified_ = false;
         current_path_ = path;
         update_title();

@@ -10,6 +10,10 @@ $windeployqt = "$qtPrefix\bin\windeployqt6.exe"
 
 $env:Path = "$mingwBin;$ninja;$qtDir\Tools\CMake_64\bin;$env:Path"
 
+# Ensure translations are up-to-date in the build directory
+New-Item -ItemType Directory -Force -Path "build/gui/translations" | Out-Null
+Copy-Item "translations/w3x-packer_zh_CN.qm" "build/gui/translations/" -Force
+
 # ---- Build ---------------------------------------------------
 if (-not (Test-Path "build/CMakeCache.txt")) {
     Write-Output "== Configuring =="
@@ -26,6 +30,20 @@ Write-Output "== Building =="
 & $cmake --build build
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) { exit $exitCode }
+
+# Copy plugin DLLs to GUI build directory so running from build/ works
+if (Test-Path "build/plugins") {
+    New-Item -ItemType Directory -Force -Path "build/gui/plugins" | Out-Null
+    Get-ChildItem "build/plugins/*.dll" | ForEach-Object {
+        Copy-Item $_.FullName "build/gui/plugins/" -Force
+        Write-Output "  [dev] $($_.Name) -> build/gui/plugins/"
+    }
+    # Copy plugin .qm translation files alongside DLLs
+    Get-ChildItem "build/plugins/*.qm" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName "build/gui/plugins/" -Force
+        Write-Output "  [dev] $($_.Name) -> build/gui/plugins/"
+    }
+}
 
 # ---- Dist ----------------------------------------------------
 Write-Output "== Organizing dist =="
@@ -64,6 +82,11 @@ Copy-Item "build\w3x_tests.exe" "$testDir\"
 # Plugin DLLs
 if (Test-Path "build/plugins") {
     Get-ChildItem "build/plugins/*.dll" | ForEach-Object {
+        Copy-Item $_.FullName "$plugDir\"
+        Write-Output "  [plugin] $($_.Name)"
+    }
+    # Plugin translation files
+    Get-ChildItem "build/plugins/*.qm" -ErrorAction SilentlyContinue | ForEach-Object {
         Copy-Item $_.FullName "$plugDir\"
         Write-Output "  [plugin] $($_.Name)"
     }
