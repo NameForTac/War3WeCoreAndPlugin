@@ -206,7 +206,24 @@ QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_
             mpq_file += '/';
         mpq_file += "War3x.mpq";
         if (!SFileOpenArchive(to_w(mpq_file).c_str(), 0, MPQ_OPEN_READ_ONLY, &hMpq)) {
-            qWarning() << "[BLP] cannot open war3.mpq or war3x.mpq from" << wc3_data_dir.c_str();
+            static bool warned = false;
+            if (!warned) {
+                DWORD err = GetLastError();
+                // Check if the files exist at all
+                bool war3_exists = (GetFileAttributesW(to_w(mpq_file).c_str()) != INVALID_FILE_ATTRIBUTES);
+                // Try war3.mpq path for existence check
+                std::string war3_path = wc3_data_dir;
+                if (!war3_path.empty() && war3_path.back() != '/' && war3_path.back() != '\\')
+                    war3_path += '/';
+                war3_path += "war3.mpq";
+                bool war3_exists2 = (GetFileAttributesW(to_w(war3_path).c_str()) != INVALID_FILE_ATTRIBUTES);
+                qWarning().noquote()
+                    << QStringLiteral("[BLP] Cannot open MPQ from %1 (war3.mpq exists=%2, error=%3)")
+                           .arg(QString::fromStdString(wc3_data_dir))
+                           .arg(war3_exists2 ? "yes" : "no")
+                           .arg(err);
+                warned = true;
+            }
             return {};
         }
     }
