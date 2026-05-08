@@ -54,12 +54,17 @@ uniform vec3 u_light_dir;
 uniform float u_lighting;
 uniform sampler2DArray u_tex_array;
 uniform float u_use_tex;
-uniform float u_tex_tile;
+uniform vec2 u_tile_grid;
 out vec4 frag_color;
 void main() {
     vec3 base_color = v_color;
     if (u_use_tex > 0.5) {
-        vec2 uv = fract(v_tile_coord);
+        vec2 tile_floor = floor(v_tile_coord);
+        float variant = mod(tile_floor.x * 7.0 + tile_floor.y * 13.0,
+                            u_tile_grid.x * u_tile_grid.y);
+        float vx = mod(variant, u_tile_grid.x);
+        float vy = floor(variant / u_tile_grid.x);
+        vec2 uv = (fract(v_tile_coord) + vec2(vx, vy)) / u_tile_grid;
         vec3 c0 = texture(u_tex_array, vec3(uv, v_tex0)).rgb;
         vec3 c1 = texture(u_tex_array, vec3(uv, v_tex1)).rgb;
         base_color = mix(c0, c1, v_blend);
@@ -142,6 +147,7 @@ void TerrainWidget::initializeGL() {
             u_lighting_  = glGetUniformLocation(program_, "u_lighting");
             u_use_tex_   = glGetUniformLocation(program_, "u_use_tex");
             u_tex_array_ = glGetUniformLocation(program_, "u_tex_array");
+            u_tile_grid_ = glGetUniformLocation(program_, "u_tile_grid");
         }
     }
     if (vs) glDeleteShader(vs);
@@ -356,8 +362,8 @@ void TerrainWidget::upload_textures() {
     tex_count_ = (int)terrain_->ground_tiles.size();
     if (tex_count_ <= 0) return;
 
-    int tex_w = kTexSize_;
-    int tex_h = kTexSize_;
+    // WC3 terrain BLPs are 4×8 atlases of 32 sub-tile variants
+    int atlas_w = 256, atlas_h = 512;
     std::vector<QImage> tile_images(tex_count_);
     int loaded_from_blp = 0;
 
@@ -376,16 +382,17 @@ void TerrainWidget::upload_textures() {
                 raw = builder_->read_resource(mpqPath.toStdString());
             if (!raw.empty()) {
                 tile_images[i] = read_blp(raw)
-                    .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                    .scaled(atlas_w, atlas_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                     .convertToFormat(QImage::Format_RGB888);
                 if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
             }
         }
 
-        // Fallback: procedural texture
-        tile_images[i] = generate_tile_texture(tileId, i);
+        // Fallback: procedural texture (scale to atlas size)
+        tile_images[i] = generate_tile_texture(tileId, i)
+            .scaled(atlas_w, atlas_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         if (tile_images[i].isNull()) {
-            tile_images[i] = QImage(tex_w, tex_h, QImage::Format_RGB888);
+            tile_images[i] = QImage(atlas_w, atlas_h, QImage::Format_RGB888);
             tile_images[i].fill(QColor(255, 0, 255));
         }
     }
@@ -397,21 +404,21 @@ void TerrainWidget::upload_textures() {
     glGenTextures(1, &tex_array_);
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
 
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, tex_w, tex_h, tex_count_,
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, atlas_w, atlas_h, tex_count_,
                  0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     for (int i = 0; i < tex_count_; ++i) {
         if (tile_images[i].isNull()) continue;
         glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i,
-                        tex_w, tex_h, 1, GL_RGB, GL_UNSIGNED_BYTE, tile_images[i].bits());
+                        atlas_w, atlas_h, 1, GL_RGB, GL_UNSIGNED_BYTE, tile_images[i].bits());
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 }
@@ -616,7 +623,7 @@ void TerrainWidget::paintGL() {
 
     bool useTex = tex_array_ > 0 && tex_count_ > 0;
     glUniform1f(u_use_tex_, useTex ? 1.0f : 0.0f);
-    glUniform1f(glGetUniformLocation(program_, "u_tex_tile"), kTileSize);
+    glUniform2f(u_tile_grid_, 4.0f, 8.0f);
     if (tex_array_) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);

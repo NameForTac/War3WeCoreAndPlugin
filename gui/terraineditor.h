@@ -86,6 +86,7 @@ private:
     GLuint u_lighting_ = 0;
     GLuint u_use_tex_ = 0;
     GLuint u_tex_array_ = 0;
+    GLuint u_tile_grid_ = 0;
 
     // Texture array
     GLuint tex_array_ = 0;
