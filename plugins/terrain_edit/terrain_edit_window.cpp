@@ -447,9 +447,11 @@ void TerrainEditWindow::selectTool(EditTool tool) {
 // ============================================================
 void TerrainEditWindow::onMapLoaded(MapBuilder* builder) {
     try {
+        builder_ = builder;
         terrain_ = builder->read_terrain();
         has_terrain_ = true;
         modified_ = false;
+        widget_->setBuilder(builder_);
         widget_->setWc3DataDir(wc3_data_dir_);
         widget_->loadTerrain(&terrain_);
         widget_->setShowTexture(show_texture_);

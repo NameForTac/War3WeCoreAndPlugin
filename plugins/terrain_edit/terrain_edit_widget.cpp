@@ -1,5 +1,6 @@
 #include "terrain_edit_widget.h"
 #include "blp_reader.h"
+#include "../../src/core/map_builder.h"
 #include <QOpenGLContext>
 #include <QPainter>
 #include <QDebug>
@@ -108,15 +109,7 @@ void TerrainEditWidget::loadTerrain(Terrain* terrain) {
     terrain_ = terrain;
     has_terrain_ = (terrain != nullptr);
 
-    qDebug() << "[TerrainEdit] loadTerrain has_terrain_=" << has_terrain_;
-
     if (has_terrain_) {
-        qDebug() << "[TerrainEdit]  tile_width=" << terrain_->tile_width
-                 << "tile_height=" << terrain_->tile_height
-                 << "tilepoints=" << terrain_->tilepoints.size()
-                 << "ground_tiles=" << terrain_->ground_tiles.size()
-                 << "center_offset_x=" << terrain_->center_offset_x
-                 << "center_offset_y=" << terrain_->center_offset_y;
         tex_dirty_ = true;
 
         float cx = terrain_->center_offset_x + (terrain_->tile_width - 1) * kTileSize * 0.5f;
@@ -368,12 +361,11 @@ static QString tileIdToBlpPath(const QString& tileId) {
     if (tileId.length() < 1) return {};
     QString folder = tilesetFolder(tileId[0]);
     if (folder.isEmpty()) return {};
-    return QString("TerrainArt\\%1\\%2.blp").arg(folder).arg(tileId);
+    return QString("TerrainArt/%1/%2.blp").arg(folder).arg(tileId);
 }
 
 void TerrainEditWidget::uploadTextures() {
     if (!terrain_ || terrain_->ground_tiles.empty()) {
-        qDebug() << "[TerrainEdit] uploadTextures: no tiles to upload";
         tex_count_ = 0;
         return;
     }
@@ -389,42 +381,50 @@ void TerrainEditWidget::uploadTextures() {
     }
 
     tex_count_ = (int)terrain_->ground_tiles.size();
-    qDebug() << "[TerrainEdit] uploadTextures: tex_count_=" << tex_count_;
     if (tex_count_ <= 0) {
         qWarning() << "[TerrainEdit] uploadTextures: tex_count_ <= 0!";
         return;
     }
 
     // Pre-load all tile textures (try BLP from MPQ, fallback to procedural)
-    int tex_w = 128;  // use 128x128 for sharper terrain textures
-    int tex_h = 128;
+    int tex_w = kTexSize_;
+    int tex_h = kTexSize_;
     std::vector<QImage> tile_images(tex_count_);
 
     for (int i = 0; i < tex_count_; ++i) {
         QString tileId = QString::fromStdString(terrain_->ground_tiles[i]);
 
-        // Try loading the real BLP texture from WC3 MPQ
-        if (!wc3_data_dir_.empty()) {
+        // 1) Try loading BLP from map MPQ first
+        if (builder_) {
             QString mpqPath = tileIdToBlpPath(tileId);
             if (!mpqPath.isEmpty()) {
-                QImage blpImg = load_wc3_texture(wc3_data_dir_, mpqPath.toStdString());
-                if (!blpImg.isNull()) {
-                    // Scale to our target size
-                    tile_images[i] = blpImg.scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                                            .convertToFormat(QImage::Format_RGB888);
-                    qDebug() << "[TerrainEdit] loaded BLP texture for" << tileId << mpqPath;
-                    continue;
-                } else {
-                    qDebug() << "[TerrainEdit] BLP fallback for" << tileId << mpqPath;
+                std::vector<uint8_t> raw = builder_->read_raw(mpqPath.toStdString());
+                if (!raw.empty()) {
+                    tile_images[i] = read_blp(raw)
+                        .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                        .convertToFormat(QImage::Format_RGB888);
+                    if (!tile_images[i].isNull()) continue;
                 }
             }
         }
 
-        // Fallback: generate procedural texture
+        // 2) Fallback to WC3 war3.mpq
+        if (tile_images[i].isNull() && !wc3_data_dir_.empty()) {
+            QString mpqPath = tileIdToBlpPath(tileId);
+            if (!mpqPath.isEmpty()) {
+                QImage blpImg = load_wc3_texture(wc3_data_dir_, mpqPath.toStdString());
+                if (!blpImg.isNull()) {
+                    tile_images[i] = blpImg.scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                                            .convertToFormat(QImage::Format_RGB888);
+                    continue;
+                }
+            }
+        }
+
+        // 3) Fallback: generate procedural texture
         QImage img = generateTileTexture(tileId, i);
         if (img.isNull()) {
             qWarning() << "[TerrainEdit] generated null texture for" << tileId;
-            // Create a magenta placeholder so we know something is wrong
             img = QImage(tex_w, tex_h, QImage::Format_RGB888);
             img.fill(QColor(255, 0, 255));
         }
@@ -432,7 +432,6 @@ void TerrainEditWidget::uploadTextures() {
     }
 
     glGenTextures(1, &tex_array_);
-    qDebug() << "[TerrainEdit] uploadTextures: tex_array_=" << tex_array_;
 
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
     GLenum texErr = glGetError();
@@ -488,17 +487,14 @@ void TerrainEditWidget::initializeGL() {
     // Terrain shader
     GLuint vs = compileShader(GL_VERTEX_SHADER, kTerrainVert);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, kTerrainFrag);
-    qDebug() << "[TerrainEdit] Terrain vs=" << vs << "fs=" << fs;
     if (vs && fs) {
         program_ = linkProgram(vs, fs);
-        qDebug() << "[TerrainEdit] Terrain program_=" << program_;
         if (program_) {
             u_mvp_ = glGetUniformLocation(program_, "u_mvp");
             u_light_dir_ = glGetUniformLocation(program_, "u_light_dir");
             u_lighting_ = glGetUniformLocation(program_, "u_lighting");
             u_use_tex_ = glGetUniformLocation(program_, "u_use_tex");
             u_tex_array_ = glGetUniformLocation(program_, "u_tex_array");
-            qDebug() << "[TerrainEdit] Uniforms:" << u_mvp_ << u_light_dir_ << u_lighting_ << u_use_tex_ << u_tex_array_;
         }
     } else {
         qWarning() << "[TerrainEdit] Shader compilation failed!";
@@ -530,7 +526,6 @@ void TerrainEditWidget::buildMesh() {
 
     int cols = terrain_->tile_width;
     int rows = terrain_->tile_height;
-    qDebug() << "[TerrainEdit] buildMesh cols=" << cols << "rows=" << rows;
 
     struct Vertex { float x, y, z, r, g, b, nx, ny, nz, tex_index; };
     std::vector<Vertex> vertices;
@@ -712,32 +707,12 @@ void TerrainEditWidget::uploadGrid() {
 // Rendering
 // ============================================================
 void TerrainEditWidget::paintGL() {
-    // Check for prior GL errors
     GLenum err;
-    while ((err = glGetError()) != GL_NO_ERROR)
-        qWarning() << "[TerrainEdit] GL error BEFORE paintGL:" << err;
-
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     if (!has_terrain_ || !terrain_) {
-        qDebug() << "[TerrainEdit] paintGL: no terrain (has_terrain_=" << has_terrain_ << "terrain_=" << terrain_ << ")";
         return;
     }
-
-    // Debug: check program and vertex count
-    GLint cur_prog = 0;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
-    qDebug() << "[TerrainEdit] paintGL: program_=" << program_
-             << "current_program=" << cur_prog
-             << "vertex_count_=" << vertex_count_
-             << "index_count_=" << index_count_
-             << "render_mode_=" << (int)render_mode_
-             << "show_texture_=" << show_texture_
-             << "tex_array_=" << tex_array_
-             << "cam_center=" << cam_center_
-             << "cam_dist=" << cam_distance_
-             << "cam_yaw=" << cam_yaw_
-             << "cam_pitch=" << cam_pitch_;
 
     // Lazy texture upload (must happen in valid GL context)
     if (tex_dirty_) {
@@ -747,8 +722,6 @@ void TerrainEditWidget::paintGL() {
         tex_dirty_ = false;
     }
 
-    // Determine grid LOD step from current distance
-    // (mesh_dirty_ will trigger uploadGrid which reads cam_distance_)
     if (mesh_dirty_) {
         uploadMesh();
         uploadGrid();
@@ -778,8 +751,6 @@ void TerrainEditWidget::paintGL() {
     view.lookAt(eye, center, up);
 
     QMatrix4x4 mvp = proj * view;
-
-    qDebug() << "[TerrainEdit] Camera eye=" << eye << "center=" << center;
 
     // --- Draw terrain ---
     glUseProgram(program_);

@@ -74,6 +74,7 @@ private:
     QComboBox* render_mode_combo_ = nullptr;
 
     Terrain terrain_;
+    MapBuilder* builder_ = nullptr;
     bool has_terrain_ = false;
     QString wc3_data_dir_;
 };
