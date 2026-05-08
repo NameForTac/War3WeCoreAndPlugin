@@ -282,6 +282,9 @@ QImage TerrainEditWidget::generateNoiseTexture(int w, int h,
             int r = qBound(0, (int)(base.red()   + var.red()   * (n - 0.5f) * 2.0f), 255);
             int g = qBound(0, (int)(base.green() + var.green() * (n - 0.5f) * 2.0f), 255);
             int b = qBound(0, (int)(base.blue()  + var.blue()  * (n - 0.5f) * 2.0f), 255);
+            // Overlay a grid to make procedural textures visually distinct
+            bool grid = (x < 8 || x >= w - 8) || (y < 8 || y >= h - 8);
+            if (grid) { r = r * 3 / 4; g = g * 3 / 4; b = b * 3 / 4; }
             line[x * 3]     = (uchar)r;
             line[x * 3 + 1] = (uchar)g;
             line[x * 3 + 2] = (uchar)b;
@@ -390,6 +393,7 @@ void TerrainEditWidget::uploadTextures() {
     int tex_w = kTexSize_;
     int tex_h = kTexSize_;
     std::vector<QImage> tile_images(tex_count_);
+    int loaded_from_blp = 0;
 
     for (int i = 0; i < tex_count_; ++i) {
         QString tileId = QString::fromStdString(terrain_->ground_tiles[i]);
@@ -403,7 +407,7 @@ void TerrainEditWidget::uploadTextures() {
                     tile_images[i] = read_blp(raw)
                         .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                         .convertToFormat(QImage::Format_RGB888);
-                    if (!tile_images[i].isNull()) continue;
+                    if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
                 }
             }
         }
@@ -416,6 +420,7 @@ void TerrainEditWidget::uploadTextures() {
                 if (!blpImg.isNull()) {
                     tile_images[i] = blpImg.scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                                             .convertToFormat(QImage::Format_RGB888);
+                    ++loaded_from_blp;
                     continue;
                 }
             }
@@ -430,6 +435,10 @@ void TerrainEditWidget::uploadTextures() {
         }
         tile_images[i] = img;
     }
+
+    qWarning().noquote()
+        << QStringLiteral("[TerrainEdit] Textures: %1/%2 from BLP, %3 procedural")
+               .arg(loaded_from_blp).arg(tex_count_).arg(tex_count_ - loaded_from_blp);
 
     glGenTextures(1, &tex_array_);
 
