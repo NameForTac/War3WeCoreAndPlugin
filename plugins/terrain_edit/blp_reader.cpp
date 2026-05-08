@@ -199,29 +199,34 @@ QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_
     mpq_file += "war3.mpq";
 
     HANDLE hMpq = nullptr;
+    DWORD err_war3 = ERROR_SUCCESS;
     if (!SFileOpenArchive(to_w(mpq_file).c_str(), 0, MPQ_OPEN_READ_ONLY, &hMpq)) {
+        err_war3 = GetLastError();
         // Try War3x.mpq as fallback
         mpq_file = wc3_data_dir;
         if (!mpq_file.empty() && mpq_file.back() != '/' && mpq_file.back() != '\\')
             mpq_file += '/';
         mpq_file += "War3x.mpq";
+        DWORD err_war3x = ERROR_SUCCESS;
         if (!SFileOpenArchive(to_w(mpq_file).c_str(), 0, MPQ_OPEN_READ_ONLY, &hMpq)) {
+            err_war3x = GetLastError();
             static bool warned = false;
             if (!warned) {
-                DWORD err = GetLastError();
-                // Check if the files exist at all
-                bool war3_exists = (GetFileAttributesW(to_w(mpq_file).c_str()) != INVALID_FILE_ATTRIBUTES);
-                // Try war3.mpq path for existence check
+                // Check if the files actually exist on disk
                 std::string war3_path = wc3_data_dir;
                 if (!war3_path.empty() && war3_path.back() != '/' && war3_path.back() != '\\')
                     war3_path += '/';
                 war3_path += "war3.mpq";
-                bool war3_exists2 = (GetFileAttributesW(to_w(war3_path).c_str()) != INVALID_FILE_ATTRIBUTES);
+                std::string war3x_path = wc3_data_dir;
+                if (!war3x_path.empty() && war3x_path.back() != '/' && war3x_path.back() != '\\')
+                    war3x_path += '/';
+                war3x_path += "War3x.mpq";
+                bool war3_disk = (GetFileAttributesW(to_w(war3_path).c_str()) != INVALID_FILE_ATTRIBUTES);
+                bool war3x_disk = (GetFileAttributesW(to_w(war3x_path).c_str()) != INVALID_FILE_ATTRIBUTES);
                 qWarning().noquote()
-                    << QStringLiteral("[BLP] Cannot open MPQ from %1 (war3.mpq exists=%2, error=%3)")
-                           .arg(QString::fromStdString(wc3_data_dir))
-                           .arg(war3_exists2 ? "yes" : "no")
-                           .arg(err);
+                    << QStringLiteral("[BLP] MPQ open: war3.mpq exists=%1 err=%2 | War3x.mpq exists=%3 err=%4")
+                           .arg(war3_disk ? "yes" : "no").arg(err_war3)
+                           .arg(war3x_disk ? "yes" : "no").arg(err_war3x);
                 warned = true;
             }
             return {};
