@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <QDebug>
 #include <QFile>
-#include <windows.h>
+#include "../../src/core/archive.h"
 
 // ============================================================
 // BLP1 decoder
@@ -173,18 +173,8 @@ QImage read_blp(const std::vector<uint8_t>& data) {
 }
 
 // ============================================================
-// Load a texture from War3.mpq using StormLib
+// Load a texture from War3.mpq using Archive (core lib wrapper)
 // ============================================================
-#include <StormLib.h>
-
-// Convert narrow string to wide (Windows TCHAR, UNICODE defined)
-static std::wstring to_w(const std::string& s) {
-    if (s.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
-    std::wstring w(len, 0);
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], len);
-    return w;
-}
 
 QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_path) {
     if (wc3_data_dir.empty()) {
@@ -193,105 +183,45 @@ QImage load_wc3_texture(const std::string& wc3_data_dir, const std::string& mpq_
     }
 
     // Build path to war3.mpq
-    std::string mpq_file = wc3_data_dir;
-    if (!mpq_file.empty() && mpq_file.back() != '/' && mpq_file.back() != '\\')
-        mpq_file += '/';
-    mpq_file += "war3.mpq";
-
-    static bool warned = false;
-
-    // Helper lambda: try opening an MPQ with various approaches
-    auto try_open_mpq = [&](const std::string& path, DWORD extra_flags, HANDLE* ph) -> bool {
-        std::wstring wpath = to_w(path);
-        return SFileOpenArchive(wpath.c_str(), 0, MPQ_OPEN_READ_ONLY | extra_flags, ph);
+    auto build_path = [&](const std::string& file) -> std::string {
+        std::string p = wc3_data_dir;
+        if (!p.empty() && p.back() != '/' && p.back() != '\\')
+            p += '/';
+        p += file;
+        // Use backslashes for Windows
+        for (auto& c : p) if (c == '/') c = '\\';
+        return p;
     };
 
-    HANDLE hMpq = nullptr;
-    if (!try_open_mpq(mpq_file, 0, &hMpq)) {
-        DWORD err_war3 = GetLastError();
+    std::string mpq_file;
+    Archive archive;
 
-        // Make a backslash version of the path
-        std::string mpq_file_bs = mpq_file;
-        for (auto& c : mpq_file_bs) if (c == '/') c = '\\';
-
-        // Try with MPQ_OPEN_FORCE_MPQ_V1 (no bitmap)
-        if (!try_open_mpq(mpq_file, MPQ_OPEN_FORCE_MPQ_V1, &hMpq)) {
-            DWORD err_v1 = GetLastError();
-
-            // Try with backslashes
-            if (!try_open_mpq(mpq_file_bs, 0, &hMpq)) {
-                DWORD err_bs = GetLastError();
-
-                // Try with backslashes + FORCE_MPQ_V1
-                if (!try_open_mpq(mpq_file_bs, MPQ_OPEN_FORCE_MPQ_V1, &hMpq)) {
-                    if (!warned) {
-                        // CreateFileW diagnostic for war3.mpq
-                        HANDLE hTestW = CreateFileW(to_w(mpq_file).c_str(), GENERIC_READ,
-                                                    FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                                    FILE_ATTRIBUTE_NORMAL, nullptr);
-                        DWORD w_err = GetLastError();
-                        bool w_ok = (hTestW != INVALID_HANDLE_VALUE);
-                        if (hTestW != INVALID_HANDLE_VALUE) CloseHandle(hTestW);
-
-                        qWarning().noquote()
-                            << QStringLiteral("[BLP] war3.mpq: err=%1 v1=%2 bs=%3 bsv1=%4 CreateFileW=%5")
-                                   .arg(err_war3).arg(err_v1).arg(err_bs).arg(err_bs)
-                                   .arg(w_ok ? "ok" : QString::number(w_err));
-                    }
-                    warned = true;
-                    return {};
-                }
-            }
+    // Try war3.mpq first
+    mpq_file = build_path("war3.mpq");
+    if (archive.open_read(mpq_file)) {
+        auto data = archive.read_file(mpq_path);
+        if (!data.empty()) {
+            QImage img = read_blp(data);
+            if (!img.isNull()) return img;
         }
     }
 
-    // Try War3x.mpq as fallback if we didn't open war3.mpq
-    if (hMpq == nullptr) {
-        mpq_file = wc3_data_dir;
-        if (!mpq_file.empty() && mpq_file.back() != '/' && mpq_file.back() != '\\')
-            mpq_file += '/';
-        mpq_file += "War3x.mpq";
-        if (!try_open_mpq(mpq_file, 0, &hMpq)) {
-            DWORD err_war3x = GetLastError();
-            if (!warned) {
-                qWarning().noquote()
-                    << QStringLiteral("[BLP] War3x.mpq also failed err=%1").arg(err_war3x);
-                warned = true;
-            }
-            return {};
+    // Fallback to War3x.mpq
+    mpq_file = build_path("War3x.mpq");
+    if (archive.open_read(mpq_file)) {
+        auto data = archive.read_file(mpq_path);
+        if (!data.empty()) {
+            QImage img = read_blp(data);
+            if (!img.isNull()) return img;
         }
     }
 
-    // Read the BLP file from MPQ
-    HANDLE hFile = nullptr;
-    if (!SFileOpenFileEx(hMpq, mpq_path.c_str(), SFILE_OPEN_FROM_MPQ, &hFile)) {
-        DWORD err = GetLastError();
-        qWarning() << "[BLP] cannot find" << mpq_path.c_str() << "in MPQ, error:" << err;
-        SFileCloseArchive(hMpq);
-        return {};
+    static bool warned = false;
+    if (!warned) {
+        qWarning().noquote()
+            << QStringLiteral("[BLP] Cannot open MPQ from %1")
+                   .arg(QString::fromStdString(wc3_data_dir));
+        warned = true;
     }
-
-    DWORD file_size = SFileGetFileSize(hFile, nullptr);
-    if (file_size == 0 || file_size == SFILE_INVALID_SIZE) {
-        SFileCloseFile(hFile);
-        SFileCloseArchive(hMpq);
-        return {};
-    }
-
-    std::vector<uint8_t> buf(file_size);
-    DWORD read = 0;
-    bool ok = SFileReadFile(hFile, buf.data(), file_size, &read, nullptr);
-    SFileCloseFile(hFile);
-    SFileCloseArchive(hMpq);
-
-    if (!ok || read != file_size) {
-        qWarning() << "[BLP] read failed for" << mpq_path.c_str();
-        return {};
-    }
-
-    QImage img = read_blp(buf);
-    if (img.isNull()) {
-        qWarning() << "[BLP] decode failed for" << mpq_path.c_str();
-    }
-    return img;
+    return {};
 }
