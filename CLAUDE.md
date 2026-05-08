@@ -2,6 +2,8 @@
 
 C++ 编写的《魔兽争霸 III》.w3x 地图打包引擎 + CLI + Qt GUI + 单元测试。
 
+**Git 提交规则**: 每次更新/修复/添加功能后，Claude 必须直接提交到 Git 并写上提交说明，不得等待用户手动操作。
+
 **技术栈**: C++17, CMake + Ninja, StormLib (FetchContent), Qt6 (GUI, MinGW)
 
 ## 项目结构

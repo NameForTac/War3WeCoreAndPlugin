@@ -23,6 +23,7 @@ public:
     void onMapClosed();
     void syncToBuilder(MapBuilder* builder);
     bool isModified() const { return modified_; }
+    void setWc3DataDir(const QString& dir) { wc3_data_dir_ = dir; }
 
 signals:
     void contentChanged();
@@ -74,4 +75,5 @@ private:
 
     Terrain terrain_;
     bool has_terrain_ = false;
+    QString wc3_data_dir_;
 };

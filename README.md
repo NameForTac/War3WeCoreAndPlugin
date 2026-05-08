@@ -66,7 +66,7 @@ GUI 程序内置了以下编辑器，每个均为 `IEditorPlugin` 实现：
 |--------|------|--------|
 | Map Info | 查看/编辑地图名称、作者、描述、玩家、势力等 | 是 |
 | Object Editor | 编辑单位/物品/技能等自定义对象 | 是 |
-| Terrain | 3D 地形浏览（OpenGL，轨道相机） | 否 |
+| Terrain | 3D 地形编辑（OpenGL，高度/纹理笔刷，撤销/重做，BLP 贴图） | 是 |
 | Placement | 2D 单位/装饰物摆放俯视图 | 否 |
 | File Browser | 浏览 MPQ 内文件列表 | 否 |
 | Data Viewer | 插件示例：分门别类展示地图全部数据 | 否 |
@@ -117,7 +117,8 @@ w3x-packer/
 │   ├── placementeditor.h/cpp # 摆放编辑插件
 │   └── settingsdialog.h/cpp  # 设置对话框
 ├── plugins/                  # 外部 DLL 插件
-│   └── sample_tab/           # Map Data Viewer 示例
+│   ├── sample_tab/           # Map Data Viewer 示例
+│   └── terrain_edit/         # 地形编辑器插件（独立窗口，BLP 贴图，GL 渲染）
 ├── tests/                    # 单元测试
 └── translations/             # 本地化翻译
 ```

@@ -1,4 +1,5 @@
 #include "terrain_edit_widget.h"
+#include "blp_reader.h"
 #include <QOpenGLContext>
 #include <QPainter>
 #include <QDebug>
@@ -107,7 +108,15 @@ void TerrainEditWidget::loadTerrain(Terrain* terrain) {
     terrain_ = terrain;
     has_terrain_ = (terrain != nullptr);
 
+    qDebug() << "[TerrainEdit] loadTerrain has_terrain_=" << has_terrain_;
+
     if (has_terrain_) {
+        qDebug() << "[TerrainEdit]  tile_width=" << terrain_->tile_width
+                 << "tile_height=" << terrain_->tile_height
+                 << "tilepoints=" << terrain_->tilepoints.size()
+                 << "ground_tiles=" << terrain_->ground_tiles.size()
+                 << "center_offset_x=" << terrain_->center_offset_x
+                 << "center_offset_y=" << terrain_->center_offset_y;
         tex_dirty_ = true;
 
         float cx = terrain_->center_offset_x + (terrain_->tile_width - 1) * kTileSize * 0.5f;
@@ -324,13 +333,55 @@ QImage TerrainEditWidget::generateTileTexture(const QString& tileId, int idx) {
     return generateNoiseTexture(kTexSize_, kTexSize_, base, var, scale);
 }
 
+// ============================================================
+// Tile ID → BLP path in MPQ, and procedural texture generation
+// ============================================================
+
+// Map the first character of a tile ID (e.g. "Ldrt" → 'L') to
+// the tileset folder name inside War3.mpq's TerrainArt\ directory.
+static QString tilesetFolder(QChar ts) {
+    switch (ts.toUpper().unicode()) {
+    case 'A': return "Ashenvale";
+    case 'B': return "Barrens";
+    case 'C': return "Felwood";
+    case 'D': return "Dungeon";
+    case 'F': return "LordaeronFall";
+    case 'G': return "Underground";
+    case 'I': return "Icecrown";
+    case 'J': return "DalaranRuins";
+    case 'K': return "BlackCitadel";
+    case 'L': return "LordaeronSummer";
+    case 'N': return "Northrend";
+    case 'O': return "Outland";
+    case 'Q': return "VillageFall";
+    case 'V': return "Village";
+    case 'W': return "LordaeronWinter";
+    case 'X': return "Dalaran";
+    case 'Y': return "Cityscape";
+    case 'Z': return "SunkenRuins";
+    default:  return {};
+    }
+}
+
+// Convert a tile ID like "Ldrt" to the MPQ path like "TerrainArt\LordaeronSummer\Ldrt.blp"
+static QString tileIdToBlpPath(const QString& tileId) {
+    if (tileId.length() < 1) return {};
+    QString folder = tilesetFolder(tileId[0]);
+    if (folder.isEmpty()) return {};
+    return QString("TerrainArt\\%1\\%2.blp").arg(folder).arg(tileId);
+}
+
 void TerrainEditWidget::uploadTextures() {
     if (!terrain_ || terrain_->ground_tiles.empty()) {
+        qDebug() << "[TerrainEdit] uploadTextures: no tiles to upload";
         tex_count_ = 0;
         return;
     }
 
-    if (!isValid()) return;
+    if (!isValid()) {
+        qWarning() << "[TerrainEdit] uploadTextures: widget not valid!";
+        return;
+    }
 
     if (tex_array_) {
         glDeleteTextures(1, &tex_array_);
@@ -338,21 +389,70 @@ void TerrainEditWidget::uploadTextures() {
     }
 
     tex_count_ = (int)terrain_->ground_tiles.size();
-    if (tex_count_ <= 0) return;
+    qDebug() << "[TerrainEdit] uploadTextures: tex_count_=" << tex_count_;
+    if (tex_count_ <= 0) {
+        qWarning() << "[TerrainEdit] uploadTextures: tex_count_ <= 0!";
+        return;
+    }
+
+    // Pre-load all tile textures (try BLP from MPQ, fallback to procedural)
+    int tex_w = 128;  // use 128x128 for sharper terrain textures
+    int tex_h = 128;
+    std::vector<QImage> tile_images(tex_count_);
+
+    for (int i = 0; i < tex_count_; ++i) {
+        QString tileId = QString::fromStdString(terrain_->ground_tiles[i]);
+
+        // Try loading the real BLP texture from WC3 MPQ
+        if (!wc3_data_dir_.empty()) {
+            QString mpqPath = tileIdToBlpPath(tileId);
+            if (!mpqPath.isEmpty()) {
+                QImage blpImg = load_wc3_texture(wc3_data_dir_, mpqPath.toStdString());
+                if (!blpImg.isNull()) {
+                    // Scale to our target size
+                    tile_images[i] = blpImg.scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                                            .convertToFormat(QImage::Format_RGB888);
+                    qDebug() << "[TerrainEdit] loaded BLP texture for" << tileId << mpqPath;
+                    continue;
+                } else {
+                    qDebug() << "[TerrainEdit] BLP fallback for" << tileId << mpqPath;
+                }
+            }
+        }
+
+        // Fallback: generate procedural texture
+        QImage img = generateTileTexture(tileId, i);
+        if (img.isNull()) {
+            qWarning() << "[TerrainEdit] generated null texture for" << tileId;
+            // Create a magenta placeholder so we know something is wrong
+            img = QImage(tex_w, tex_h, QImage::Format_RGB888);
+            img.fill(QColor(255, 0, 255));
+        }
+        tile_images[i] = img;
+    }
 
     glGenTextures(1, &tex_array_);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
+    qDebug() << "[TerrainEdit] uploadTextures: tex_array_=" << tex_array_;
 
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, kTexSize_, kTexSize_, tex_count_,
+    glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
+    GLenum texErr = glGetError();
+    if (texErr != GL_NO_ERROR)
+        qWarning() << "[TerrainEdit] glBindTexture error:" << texErr;
+
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, tex_w, tex_h, tex_count_,
                  0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    texErr = glGetError();
+    if (texErr != GL_NO_ERROR)
+        qWarning() << "[TerrainEdit] glTexImage3D error:" << texErr;
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     for (int i = 0; i < tex_count_; ++i) {
-        QString id = QString::fromStdString(terrain_->ground_tiles[i]);
-        QImage img = generateTileTexture(id, i);
-        if (img.isNull()) continue;
+        if (tile_images[i].isNull()) continue;
         glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i,
-                        kTexSize_, kTexSize_, 1, GL_RGB, GL_UNSIGNED_BYTE, img.bits());
+                        tex_w, tex_h, 1, GL_RGB, GL_UNSIGNED_BYTE, tile_images[i].bits());
+        texErr = glGetError();
+        if (texErr != GL_NO_ERROR)
+            qWarning() << "[TerrainEdit] glTexSubImage3D layer" << i << "error:" << texErr;
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
@@ -388,15 +488,20 @@ void TerrainEditWidget::initializeGL() {
     // Terrain shader
     GLuint vs = compileShader(GL_VERTEX_SHADER, kTerrainVert);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, kTerrainFrag);
+    qDebug() << "[TerrainEdit] Terrain vs=" << vs << "fs=" << fs;
     if (vs && fs) {
         program_ = linkProgram(vs, fs);
+        qDebug() << "[TerrainEdit] Terrain program_=" << program_;
         if (program_) {
             u_mvp_ = glGetUniformLocation(program_, "u_mvp");
             u_light_dir_ = glGetUniformLocation(program_, "u_light_dir");
             u_lighting_ = glGetUniformLocation(program_, "u_lighting");
             u_use_tex_ = glGetUniformLocation(program_, "u_use_tex");
             u_tex_array_ = glGetUniformLocation(program_, "u_tex_array");
+            qDebug() << "[TerrainEdit] Uniforms:" << u_mvp_ << u_light_dir_ << u_lighting_ << u_use_tex_ << u_tex_array_;
         }
+    } else {
+        qWarning() << "[TerrainEdit] Shader compilation failed!";
     }
     if (vs) glDeleteShader(vs);
     if (fs) glDeleteShader(fs);
@@ -418,10 +523,14 @@ void TerrainEditWidget::initializeGL() {
 // Mesh building
 // ============================================================
 void TerrainEditWidget::buildMesh() {
-    if (!terrain_) return;
+    if (!terrain_) {
+        qWarning() << "[TerrainEdit] buildMesh: terrain_ is null!";
+        return;
+    }
 
     int cols = terrain_->tile_width;
     int rows = terrain_->tile_height;
+    qDebug() << "[TerrainEdit] buildMesh cols=" << cols << "rows=" << rows;
 
     struct Vertex { float x, y, z, r, g, b, nx, ny, nz, tex_index; };
     std::vector<Vertex> vertices;
@@ -603,9 +712,32 @@ void TerrainEditWidget::uploadGrid() {
 // Rendering
 // ============================================================
 void TerrainEditWidget::paintGL() {
+    // Check for prior GL errors
+    GLenum err;
+    while ((err = glGetError()) != GL_NO_ERROR)
+        qWarning() << "[TerrainEdit] GL error BEFORE paintGL:" << err;
+
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (!has_terrain_ || !terrain_) return;
+    if (!has_terrain_ || !terrain_) {
+        qDebug() << "[TerrainEdit] paintGL: no terrain (has_terrain_=" << has_terrain_ << "terrain_=" << terrain_ << ")";
+        return;
+    }
+
+    // Debug: check program and vertex count
+    GLint cur_prog = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &cur_prog);
+    qDebug() << "[TerrainEdit] paintGL: program_=" << program_
+             << "current_program=" << cur_prog
+             << "vertex_count_=" << vertex_count_
+             << "index_count_=" << index_count_
+             << "render_mode_=" << (int)render_mode_
+             << "show_texture_=" << show_texture_
+             << "tex_array_=" << tex_array_
+             << "cam_center=" << cam_center_
+             << "cam_dist=" << cam_distance_
+             << "cam_yaw=" << cam_yaw_
+             << "cam_pitch=" << cam_pitch_;
 
     // Lazy texture upload (must happen in valid GL context)
     if (tex_dirty_) {
@@ -647,12 +779,21 @@ void TerrainEditWidget::paintGL() {
 
     QMatrix4x4 mvp = proj * view;
 
+    qDebug() << "[TerrainEdit] Camera eye=" << eye << "center=" << center;
+
     // --- Draw terrain ---
     glUseProgram(program_);
+    err = glGetError();
+    if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] glUseProgram error:" << err;
+
     glUniformMatrix4fv(u_mvp_, 1, GL_FALSE, mvp.constData());
+    err = glGetError();
+    if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] u_mvp error:" << err;
 
     // Light direction (fixed world-space, from upper-right-front)
     glUniform3f(u_light_dir_, 0.5f, 0.8f, 0.3f);
+    err = glGetError();
+    if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] u_light_dir error:" << err;
 
     // Texture setup (with bounds safety)
     bool useTex = show_texture_ && tex_array_ > 0 && tex_count_ > 0;
@@ -664,28 +805,39 @@ void TerrainEditWidget::paintGL() {
         glUniform1i(u_tex_array_, 0);
     }
 
+    // Disable culling for debugging
+    glDisable(GL_CULL_FACE);
+
     if (render_mode_ == RenderMode::Wireframe) {
         glUniform1f(u_lighting_, 0.0f);
-        glDisable(GL_CULL_FACE);
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         glBindVertexArray(vao_);
+        err = glGetError();
+        if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] before draw error:" << err;
         glDrawElements(GL_TRIANGLES, index_count_, GL_UNSIGNED_INT, nullptr);
+        err = glGetError();
+        if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] draw error:" << err;
         glBindVertexArray(0);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glEnable(GL_CULL_FACE);
     } else {
         glUniform1f(u_lighting_, (render_mode_ == RenderMode::Lit) ? 1.0f : 0.0f);
         glBindVertexArray(vao_);
+        err = glGetError();
+        if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] before draw error:" << err;
         glDrawElements(GL_TRIANGLES, index_count_, GL_UNSIGNED_INT, nullptr);
+        err = glGetError();
+        if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] draw error after:" << err;
         glBindVertexArray(0);
     }
+
+    glEnable(GL_CULL_FACE);
 
     // --- Draw grid ---
     if (grid_program_ && grid_vertex_count_ > 0) {
         glUseProgram(grid_program_);
         glUniformMatrix4fv(u_grid_mvp_, 1, GL_FALSE, mvp.constData());
         glUniform4f(glGetUniformLocation(grid_program_, "u_color"),
-                    0.0f, 0.0f, 0.0f, 0.35f);
+                    0.35f, 0.35f, 0.35f, 0.6f);
 
         glBindVertexArray(grid_vao_);
         glDrawArrays(GL_LINES, 0, grid_vertex_count_);
@@ -695,6 +847,44 @@ void TerrainEditWidget::paintGL() {
     // --- Draw brush preview ---
     if (hover_col_ >= 0 && hover_row_ >= 0) {
         drawBrushPreview();
+    }
+
+    // --- Debug: draw center marker ---
+    {
+        // Compile a minimal test shader on first use
+        static GLuint test_prog = 0;
+        if (!test_prog) {
+            GLuint vs = compileShader(GL_VERTEX_SHADER, kGridVert);
+            GLuint fs = compileShader(GL_FRAGMENT_SHADER, kGridFrag);
+            if (vs && fs) test_prog = linkProgram(vs, fs);
+            if (vs) glDeleteShader(vs);
+            if (fs) glDeleteShader(fs);
+        }
+        if (test_prog) {
+            float cx = cam_center_.x(), cz = cam_center_.y();
+            glUseProgram(test_prog);
+            glUniformMatrix4fv(glGetUniformLocation(test_prog, "u_mvp"), 1, GL_FALSE, mvp.constData());
+            auto draw_line = [&](float x1,float y1,float z1,float x2,float y2,float z2,float r,float g,float b,float a) {
+                glUniform4f(glGetUniformLocation(test_prog, "u_color"), r,g,b,a);
+                float verts[] = {x1,y1,z1, x2,y2,z2};
+                GLuint vao2, vbo2;
+                glGenVertexArrays(1, &vao2);
+                glGenBuffers(1, &vbo2);
+                glBindVertexArray(vao2);
+                glBindBuffer(GL_ARRAY_BUFFER, vbo2);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, 0);
+                glEnableVertexAttribArray(0);
+                glDrawArrays(GL_LINES, 0, 2);
+                glDeleteVertexArrays(1, &vao2);
+                glDeleteBuffers(1, &vbo2);
+                glBindVertexArray(0);
+            };
+            draw_line(cx-30,0,cz, cx+30,0,cz, 1,0,0,1);
+            draw_line(cx,0,cz-30, cx,0,cz+30, 0,0,1,1);
+            err = glGetError();
+            if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] marker error:" << err;
+        }
     }
 
     glUseProgram(0);

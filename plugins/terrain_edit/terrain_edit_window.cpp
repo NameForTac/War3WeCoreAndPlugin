@@ -290,6 +290,9 @@ void TerrainEditWindow::createToolbar() {
     tb->addSeparator();
     status_label_ = new QLabel(tr("Ready"), tb);
     tb->addWidget(status_label_);
+
+    // Fix toolbar width to prevent flickering as contents resize
+    tb->setFixedWidth(tb->sizeHint().width() + 8);
 }
 
 // ============================================================
@@ -405,6 +408,10 @@ void TerrainEditWindow::restoreSettings() {
     if (render_mode_combo_) {
         render_mode_combo_->setCurrentIndex(qBound(0, render_idx, 2));
     }
+    // Sync texture toggle button with loaded value
+    if (texture_toggle_btn_) {
+        texture_toggle_btn_->setChecked(show_texture_);
+    }
 
     int shape = qs.value("BrushShape", 0).toInt();
     brush_shape_ = (shape == 0) ? BrushShape::Circle : BrushShape::Square;
@@ -443,6 +450,7 @@ void TerrainEditWindow::onMapLoaded(MapBuilder* builder) {
         terrain_ = builder->read_terrain();
         has_terrain_ = true;
         modified_ = false;
+        widget_->setWc3DataDir(wc3_data_dir_);
         widget_->loadTerrain(&terrain_);
         widget_->setShowTexture(show_texture_);
         updateTextureCombo();

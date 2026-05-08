@@ -19,6 +19,7 @@ public:
     ~TerrainEditWidget() override;
 
     void loadTerrain(Terrain* terrain);
+    void setWc3DataDir(const QString& dir) { wc3_data_dir_ = dir.toStdString(); tex_dirty_ = true; update(); }
 
     void setTool(EditTool tool) { current_tool_ = tool; update(); }
     void setBrushSize(int size) { brush_size_ = std::max(1, size); update(); }
@@ -88,6 +89,7 @@ private:
 
     // Terrain data (pointer to window's copy)
     Terrain* terrain_ = nullptr;
+    std::string wc3_data_dir_;  // WC3 installation path, for loading real BLP textures
 
     // Camera
     float cam_yaw_ = -45.0f;

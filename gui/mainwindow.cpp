@@ -156,6 +156,7 @@ void MainWindow::create_widgets() {
     ctx.builder = builder_.get();
     ctx.meta_db = &meta_db_;
     ctx.parent_widget = this;
+    ctx.wc3_data_dir = wc3_data_dir_.toStdString();
     reg.init_all(ctx);
 
     // Add tabs for all plugins with ProvidesTab capability

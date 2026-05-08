@@ -36,6 +36,9 @@ struct PluginContext {
     MapBuilder* builder = nullptr;
     MetaDataDB*  meta_db = nullptr;
     QWidget*    parent_widget = nullptr;
+    // WC3 installation directory — used by plugins that need game assets (terrain textures, etc.)
+    // Empty string if not configured.
+    std::string wc3_data_dir;
 };
 
 // ============================================================
