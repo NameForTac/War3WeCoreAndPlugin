@@ -1,6 +1,7 @@
 #include "terrain_edit_widget.h"
 #include "blp_reader.h"
 #include "../../src/core/map_builder.h"
+#include "../../src/core/slk.h"
 #include <QOpenGLContext>
 #include <QPainter>
 #include <QDebug>
@@ -17,17 +18,26 @@ static const char* kTerrainVert = R"(
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_color;
 layout(location = 2) in vec3 a_normal;
-layout(location = 3) in float a_tex_index;
+layout(location = 3) in float a_tex0;
+layout(location = 4) in float a_tex1;
+layout(location = 5) in float a_blend;
+layout(location = 6) in vec2 a_tile_coord;
 uniform mat4 u_mvp;
 out vec3 v_color;
 out vec3 v_normal;
 out vec3 v_world_pos;
-out float v_tex_index;
+out float v_tex0;
+out float v_tex1;
+out float v_blend;
+out vec2 v_tile_coord;
 void main() {
     v_color = a_color;
     v_normal = a_normal;
     v_world_pos = a_pos;
-    v_tex_index = a_tex_index;
+    v_tex0 = a_tex0;
+    v_tex1 = a_tex1;
+    v_blend = a_blend;
+    v_tile_coord = a_tile_coord;
     gl_Position = u_mvp * vec4(a_pos, 1.0);
 }
 )";
@@ -37,7 +47,10 @@ static const char* kTerrainFrag = R"(
 in vec3 v_color;
 in vec3 v_normal;
 in vec3 v_world_pos;
-in float v_tex_index;
+in float v_tex0;
+in float v_tex1;
+in float v_blend;
+in vec2 v_tile_coord;
 uniform vec3 u_light_dir;
 uniform float u_lighting;
 uniform sampler2DArray u_tex_array;
@@ -47,9 +60,10 @@ out vec4 frag_color;
 void main() {
     vec3 base_color = v_color;
     if (u_use_tex > 0.5) {
-        vec2 uv = fract(v_world_pos.xz / u_tex_tile);
-        float layer = floor(v_tex_index + 0.5);
-        base_color = texture(u_tex_array, vec3(uv, layer)).rgb;
+        vec2 uv = fract(v_tile_coord);
+        vec3 c0 = texture(u_tex_array, vec3(uv, v_tex0)).rgb;
+        vec3 c1 = texture(u_tex_array, vec3(uv, v_tex1)).rgb;
+        base_color = mix(c0, c1, v_blend);
     }
     vec3 N = normalize(v_normal);
     float diff = max(dot(N, u_light_dir), 0.0);
@@ -330,41 +344,40 @@ QImage TerrainEditWidget::generateTileTexture(const QString& tileId, int idx) {
 }
 
 // ============================================================
-// Tile ID → BLP path in MPQ, and procedural texture generation
+// Tile ID → BLP path in MPQ, via Terrain.slk
 // ============================================================
 
-// Map the first character of a tile ID (e.g. "Ldrt" → 'L') to
-// the tileset folder name inside War3.mpq's TerrainArt\ directory.
-static QString tilesetFolder(QChar ts) {
-    switch (ts.toUpper().unicode()) {
-    case 'A': return "Ashenvale";
-    case 'B': return "Barrens";
-    case 'C': return "Felwood";
-    case 'D': return "Dungeon";
-    case 'F': return "LordaeronFall";
-    case 'G': return "Underground";
-    case 'I': return "Icecrown";
-    case 'J': return "DalaranRuins";
-    case 'K': return "BlackCitadel";
-    case 'L': return "LordaeronSummer";
-    case 'N': return "Northrend";
-    case 'O': return "Outland";
-    case 'Q': return "VillageFall";
-    case 'V': return "Village";
-    case 'W': return "LordaeronWinter";
-    case 'X': return "Dalaran";
-    case 'Y': return "Cityscape";
-    case 'Z': return "SunkenRuins";
-    default:  return {};
-    }
-}
+// Load tile → path mapping from Terrain.slk in WC3 MPQ.
+// Cache the map globally so we only parse once.
+static QHash<QString, QString> loadTilePathMap(MapBuilder* builder) {
+    static QHash<QString, QString> s_cache;
+    static bool s_tried = false;
+    if (s_tried) return s_cache;
+    s_tried = true;
+    if (!builder) return s_cache;
 
-// Convert a tile ID like "Ldrt" to the MPQ path like "TerrainArt\LordaeronSummer\Ldrt.blp"
-static QString tileIdToBlpPath(const QString& tileId) {
-    if (tileId.length() < 1) return {};
-    QString folder = tilesetFolder(tileId[0]);
-    if (folder.isEmpty()) return {};
-    return QString("TerrainArt/%1/%2.blp").arg(folder).arg(tileId);
+    auto data = builder->read_resource("TerrainArt\\Terrain.slk");
+    if (data.empty()) return s_cache;
+
+    std::string text(data.begin(), data.end());
+    auto table = slk::parse(text);
+
+    // Terrain.slk columns: X1=tileID, X3=dir, X4=file
+    // headers[0]=X1, headers[2]=X3, headers[3]=X4
+    // rows[r][0]=tileID, rows[r][2]=dir, rows[r][3]=file
+    for (size_t r = 0; r < table.rows.size(); ++r) {
+        auto& row = table.rows[r];
+        if (row.size() < 4) continue;
+        auto& tileId = row[0];
+        auto& dir    = row[2];
+        auto& file   = row[3];
+        if (tileId.empty() || dir.empty() || file.empty()) continue;
+        QString path = QString::fromStdString(
+            dir + "\\" + file + ".blp");
+        s_cache.insert(
+            QString::fromStdString(tileId), path);
+    }
+    return s_cache;
 }
 
 void TerrainEditWidget::uploadTextures() {
@@ -395,45 +408,44 @@ void TerrainEditWidget::uploadTextures() {
     std::vector<QImage> tile_images(tex_count_);
     int loaded_from_blp = 0;
 
+    // Build tileID → BLP path map from Terrain.slk (cached after first load)
+    auto pathMap = loadTilePathMap(builder_);
+
     for (int i = 0; i < tex_count_; ++i) {
         QString tileId = QString::fromStdString(terrain_->ground_tiles[i]);
+        QString mpqPath;
+        auto it = pathMap.find(tileId);
+        if (it != pathMap.end()) mpqPath = it.value();
 
         // 1) Try loading BLP from map MPQ first
-        if (builder_) {
-            QString mpqPath = tileIdToBlpPath(tileId);
-            if (!mpqPath.isEmpty()) {
-                std::vector<uint8_t> raw = builder_->read_raw(mpqPath.toStdString());
-                if (!raw.empty()) {
-                    tile_images[i] = read_blp(raw)
-                        .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                        .convertToFormat(QImage::Format_RGB888);
-                    if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
-                }
+        if (builder_ && !mpqPath.isEmpty()) {
+            std::vector<uint8_t> raw = builder_->read_raw(mpqPath.toStdString());
+            if (!raw.empty()) {
+                tile_images[i] = read_blp(raw)
+                    .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                    .convertToFormat(QImage::Format_RGB888);
+                if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
             }
         }
 
         // 2) Fallback to WC3 war3.mpq (via builder which has the Wc3Manager)
-        if (tile_images[i].isNull() && builder_) {
-            QString mpqPath = tileIdToBlpPath(tileId);
-            if (!mpqPath.isEmpty()) {
-                std::vector<uint8_t> raw = builder_->read_resource(mpqPath.toStdString());
-                if (!raw.empty()) {
-                    tile_images[i] = read_blp(raw)
-                        .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                        .convertToFormat(QImage::Format_RGB888);
-                    if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
-                }
+        if (tile_images[i].isNull() && builder_ && !mpqPath.isEmpty()) {
+            std::vector<uint8_t> raw = builder_->read_resource(mpqPath.toStdString());
+            if (!raw.empty()) {
+                tile_images[i] = read_blp(raw)
+                    .scaled(tex_w, tex_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                    .convertToFormat(QImage::Format_RGB888);
+                if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
             }
         }
 
         // 3) Fallback: generate procedural texture
-        QImage img = generateTileTexture(tileId, i);
-        if (img.isNull()) {
+        tile_images[i] = generateTileTexture(tileId, i);
+        if (tile_images[i].isNull()) {
             qWarning() << "[TerrainEdit] generated null texture for" << tileId;
-            img = QImage(tex_w, tex_h, QImage::Format_RGB888);
-            img.fill(QColor(255, 0, 255));
+            tile_images[i] = QImage(tex_w, tex_h, QImage::Format_RGB888);
+            tile_images[i].fill(QColor(255, 0, 255));
         }
-        tile_images[i] = img;
     }
 
     qWarning().noquote()
@@ -536,69 +548,90 @@ void TerrainEditWidget::buildMesh() {
     int cols = terrain_->tile_width;
     int rows = terrain_->tile_height;
 
-    struct Vertex { float x, y, z, r, g, b, nx, ny, nz, tex_index; };
-    std::vector<Vertex> vertices;
-    vertices.reserve(cols * rows);
-
-    for (int row = 0; row < rows; ++row) {
-        for (int col = 0; col < cols; ++col) {
-            int idx = row * cols + col;
-            const auto& tp = terrain_->tilepoints[idx];
-
-            float wx = terrain_->center_offset_x + col * kTileSize;
-            float wz = terrain_->center_offset_y + row * kTileSize;
-            float wy = tp.height;
-
-            QColor c;
-            if (show_texture_ && !terrain_->ground_tiles.empty()) {
-                int tex_idx = tp.ground_texture;
-                QString tileId;
-                if (tex_idx >= 0 && tex_idx < (int)terrain_->ground_tiles.size())
-                    tileId = QString::fromStdString(terrain_->ground_tiles[tex_idx]);
-                c = tileColor(tileId, tex_idx);
-            } else if (show_texture_) {
-                c = textureColor(tp.ground_texture);
-            } else {
-                c = heightColor(tp.height);
-            }
-
-            // Compute normal from neighbor heights
-            float hR = (col < cols - 1) ? terrain_->tilepoints[row * cols + (col + 1)].height : tp.height;
-            float hL = (col > 0)        ? terrain_->tilepoints[row * cols + (col - 1)].height : tp.height;
-            float hU = (row < rows - 1) ? terrain_->tilepoints[(row + 1) * cols + col].height : tp.height;
-            float hD = (row > 0)        ? terrain_->tilepoints[(row - 1) * cols + col].height : tp.height;
-
-            float dx = (hR - hL) / (2.0f * kTileSize);
-            float dz = (hU - hD) / (2.0f * kTileSize);
-            float len = std::sqrt(dx * dx + dz * dz + 1.0f);
-            float nx = -dx / len;
-            float ny =  1.0f / len;
-            float nz = -dz / len;
-
-            vertices.push_back({wx, wy, wz,
-                                (float)c.redF(), (float)c.greenF(), (float)c.blueF(),
-                                nx, ny, nz,
-                                (float)tp.ground_texture});
-        }
-    }
+    struct Vertex { float x, y, z, r, g, b, nx, ny, nz, tex0, tex1, blend, tx, tz; };
 
     int quads_x = cols - 1;
     int quads_z = rows - 1;
-    std::vector<GLuint> indices;
-    indices.reserve(quads_x * quads_z * 6);
+    int num_quads = quads_x * quads_z;
 
-    for (int row = 0; row < quads_z; ++row) {
-        for (int col = 0; col < quads_x; ++col) {
-            int bl = row * cols + col;
-            int br = bl + 1;
-            int tl = (row + 1) * cols + col;
-            int tr = tl + 1;
-            indices.push_back(bl);
-            indices.push_back(br);
-            indices.push_back(tl);
-            indices.push_back(br);
-            indices.push_back(tr);
-            indices.push_back(tl);
+    std::vector<Vertex> vertices;
+    vertices.reserve(num_quads * 4);
+
+    std::vector<GLuint> indices;
+    indices.reserve(num_quads * 6);
+
+    auto get_h = [&](int col, int row) -> float {
+        return terrain_->tilepoints[row * cols + col].height;
+    };
+
+    for (int qrow = 0; qrow < quads_z; ++qrow) {
+        for (int qcol = 0; qcol < quads_x; ++qcol) {
+            // Four corners: BL(qcol,qrow), BR(qcol+1,qrow), TL(qcol,qrow+1), TR(qcol+1,qrow+1)
+            int cc[4] = {qcol, qcol+1, qcol, qcol+1};
+            int cr[4] = {qrow, qrow, qrow+1, qrow+1};
+
+            // Count ground_texture occurrences at the 4 corners (max 16 tile types)
+            int tex_count[16] = {};
+            uint8_t corner_tex[4];
+            for (int c = 0; c < 4; ++c) {
+                uint8_t t = terrain_->tilepoints[cr[c] * cols + cc[c]].ground_texture;
+                corner_tex[c] = t;
+                if (t < 16) tex_count[t]++;
+            }
+
+            // Select primary (most common) and secondary texture
+            int primary = corner_tex[0], secondary = corner_tex[0];
+            int pc = 0, sc = 0;
+            for (int t = 0; t < 16; ++t) {
+                if (tex_count[t] > pc) {
+                    sc = pc; secondary = primary;
+                    pc = tex_count[t]; primary = t;
+                } else if (tex_count[t] > sc) {
+                    sc = tex_count[t]; secondary = t;
+                }
+            }
+            if (sc == 0) secondary = primary; // all corners same
+
+            int base = (int)vertices.size();
+
+            for (int c = 0; c < 4; ++c) {
+                int col = cc[c], row = cr[c];
+                const auto& tp = terrain_->tilepoints[row * cols + col];
+
+                float wx = terrain_->center_offset_x + col * kTileSize;
+                float wz = terrain_->center_offset_y + row * kTileSize;
+                float wy = tp.height;
+
+                // Color: white when textured, height-based fallback when not
+                QColor cv = show_texture_ ? Qt::white : heightColor(tp.height);
+
+                // Normal from neighbor heights
+                float hR = (col < cols - 1) ? get_h(col + 1, row) : tp.height;
+                float hL = (col > 0)        ? get_h(col - 1, row) : tp.height;
+                float hU = (row < rows - 1) ? get_h(col, row + 1) : tp.height;
+                float hD = (row > 0)        ? get_h(col, row - 1) : tp.height;
+                float dx = (hR - hL) / (2.0f * kTileSize);
+                float dz = (hU - hD) / (2.0f * kTileSize);
+                float len = std::sqrt(dx * dx + dz * dz + 1.0f);
+
+                float blend = (corner_tex[c] == (uint8_t)secondary) ? 1.0f : 0.0f;
+
+                vertices.push_back({
+                    wx, wy, wz,
+                    (float)cv.redF(), (float)cv.greenF(), (float)cv.blueF(),
+                    -dx / len, 1.0f / len, -dz / len,
+                    (float)primary, (float)secondary, blend,
+                    (float)col, (float)row
+                });
+            }
+
+            // Two triangles: BL-BR-TL, BR-TR-TL
+            indices.push_back(base);
+            indices.push_back(base + 1);
+            indices.push_back(base + 2);
+            indices.push_back(base + 1);
+            indices.push_back(base + 3);
+            indices.push_back(base + 2);
         }
     }
 
@@ -621,8 +654,14 @@ void TerrainEditWidget::buildMesh() {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, nx));
     glEnableVertexAttribArray(2);
-    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, tex_index));
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, tex0));
     glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, tex1));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, blend));
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(6, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, tx));
+    glEnableVertexAttribArray(6);
 
     glBindVertexArray(0);
 }
@@ -763,20 +802,34 @@ void TerrainEditWidget::paintGL() {
 
     // --- Draw terrain ---
     glUseProgram(program_);
-    err = glGetError();
-    if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] glUseProgram error:" << err;
 
     glUniformMatrix4fv(u_mvp_, 1, GL_FALSE, mvp.constData());
-    err = glGetError();
-    if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] u_mvp error:" << err;
 
     // Light direction (fixed world-space, from upper-right-front)
     glUniform3f(u_light_dir_, 0.5f, 0.8f, 0.3f);
-    err = glGetError();
-    if (err != GL_NO_ERROR) qWarning() << "[TerrainEdit] u_light_dir error:" << err;
 
     // Texture setup (with bounds safety)
     bool useTex = show_texture_ && tex_array_ > 0 && tex_count_ > 0;
+
+    // One-shot diagnostic: check uniform locations and texture state
+    static bool diag_gl = false;
+    if (!diag_gl) {
+        diag_gl = true;
+        int ut = u_use_tex_;
+        int uta = u_tex_array_;
+        GLint utt = glGetUniformLocation(program_, "u_tex_tile");
+        GLint tex_binding = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &tex_binding);
+        qWarning().noquote()
+            << QStringLiteral("[TerrainEdit] GL diag: u_use_tex=%1 u_tex_array=%2 u_tex_tile=%3 tex_array=%4 tex_binding=%5 show_tex=%6 useTex=%7")
+                   .arg(ut).arg(uta).arg(utt).arg(tex_array_).arg(tex_binding)
+                   .arg(show_texture_ ? 1 : 0).arg(useTex ? 1 : 0);
+        // Print number of vertices and draw call info
+        qWarning().noquote()
+            << QStringLiteral("[TerrainEdit] GL diag: vertex_count=%1 index_count=%2")
+                   .arg(vertex_count_).arg(index_count_);
+    }
+
     glUniform1f(u_use_tex_, useTex ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(program_, "u_tex_tile"), kTileSize);
     if (tex_array_) {

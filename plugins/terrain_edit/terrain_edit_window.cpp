@@ -454,7 +454,11 @@ void TerrainEditWindow::onMapLoaded(MapBuilder* builder) {
         widget_->setBuilder(builder_);
         widget_->setWc3Manager(wc3_);
         widget_->loadTerrain(&terrain_);
-        widget_->setShowTexture(show_texture_);
+        // Always enable texture view when loading a new map
+        show_texture_ = true;
+        if (texture_toggle_btn_)
+            texture_toggle_btn_->setChecked(true);
+        widget_->setShowTexture(true);
         updateTextureCombo();
 
         // Compute statistics

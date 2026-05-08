@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <cstring>
 #include <algorithm>
+#include <cstdio>
 
 // ============================================================
 // Implementation
@@ -73,8 +74,11 @@ bool Wc3Manager::load_stormlib() {
     if (storm_lib_)
         return true;
     storm_lib_ = (void*)LoadLibraryW(L"libStormLib.dll");
-    if (!storm_lib_)
+    if (!storm_lib_) {
+        fprintf(stderr, "[Wc3Manager] LoadLibrary(libStormLib.dll) failed: err=%u\n",
+                (unsigned)GetLastError());
         return false;
+    }
     SFileOpenArchive_  = (bool (*)(const char*, uint32_t, uint32_t, void**))GetProcAddress((HMODULE)storm_lib_, "SFileOpenArchive");
     SFileOpenFileEx_   = (bool (*)(void*, const char*, uint32_t, void**))      GetProcAddress((HMODULE)storm_lib_, "SFileOpenFileEx");
     SFileGetFileSize_  = (uint32_t (*)(void*, uint32_t*))                      GetProcAddress((HMODULE)storm_lib_, "SFileGetFileSize");
@@ -83,8 +87,12 @@ bool Wc3Manager::load_stormlib() {
     SFileCloseFile_    = (bool (*)(void*))                                      GetProcAddress((HMODULE)storm_lib_, "SFileCloseFile");
     bool ok = (SFileOpenArchive_ && SFileOpenFileEx_ && SFileGetFileSize_ &&
                SFileReadFile_ && SFileCloseArchive_ && SFileCloseFile_);
-    if (!ok)
+    if (!ok) {
+        fprintf(stderr, "[Wc3Manager] GetProcAddress failed: OA=%p OFE=%p GFS=%p RF=%p CA=%p CF=%p\n",
+                (void*)SFileOpenArchive_, (void*)SFileOpenFileEx_, (void*)SFileGetFileSize_,
+                (void*)SFileReadFile_, (void*)SFileCloseArchive_, (void*)SFileCloseFile_);
         free_stormlib();
+    }
     return ok;
 }
 
@@ -106,8 +114,13 @@ bool Wc3Manager::try_open_mpq(const std::string& path, void*& out_handle) const 
     if (!SFileOpenArchive_)
         return false;
     void* h = nullptr;
-    if (!SFileOpenArchive_(path.c_str(), 0, 0x100, &h))
+    DWORD err = ERROR_SUCCESS;
+    if (!SFileOpenArchive_(path.c_str(), 0, 0x100, &h)) {
+        err = GetLastError();
+        fprintf(stderr, "[Wc3Manager] SFileOpenArchive(%s) failed: err=%u\n",
+                path.c_str(), (unsigned)err);
         return false;
+    }
     out_handle = h;
     return true;
 }
@@ -141,6 +154,10 @@ bool Wc3Manager::initialize(const std::string& wc3_data_dir) {
     try_open_mpq(build_path("War3x.mpq"), war3x_mpq_);
 
     initialized_ = (war3_mpq_ != nullptr || war3x_mpq_ != nullptr);
+    fprintf(stderr, "[Wc3Manager] dir=%s war3=%s War3x=%s\n",
+            data_dir_.c_str(),
+            war3_mpq_ ? "ok" : "fail",
+            war3x_mpq_ ? "ok" : "fail");
     return initialized_;
 }
 

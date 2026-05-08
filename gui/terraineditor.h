@@ -8,12 +8,15 @@
 #include <QWheelEvent>
 #include <QMatrix4x4>
 #include <QVector3D>
+#include <QImage>
 #include <memory>
 
 class MapBuilder;
+class Wc3Manager;
 
 // ============================================================
 // TerrainWidget — QOpenGLWidget that renders the 3D terrain
+// with WC3 textures and lighting
 // ============================================================
 class TerrainWidget : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
     Q_OBJECT
@@ -23,6 +26,8 @@ public:
 
     void load_terrain(const Terrain& terrain);
     void clear_terrain();
+    void set_builder(MapBuilder* builder) { builder_ = builder; }
+    void set_wc3_manager(Wc3Manager* mgr) { wc3_ = mgr; tex_dirty_ = true; update(); }
 
 signals:
     void contentChanged();
@@ -41,8 +46,17 @@ private:
     void build_mesh();
     void upload_mesh();
     QColor height_color(float h) const;
+
+    // Shaders
     GLuint compile_shader(GLenum type, const char* src);
     GLuint link_program(GLuint vs, GLuint fs);
+
+    // Textures
+    void upload_textures();
+    QImage generate_tile_texture(const QString& tileId, int idx);
+    QImage generate_noise_texture(int w, int h, const QColor& base,
+                                  const QColor& var, float scale);
+    void free_textures();
 
     // Terrain data (owned)
     std::unique_ptr<Terrain> terrain_;
@@ -51,7 +65,7 @@ private:
     float cam_yaw_ = -45.0f;
     float cam_pitch_ = -35.0f;
     float cam_distance_ = 800.0f;
-    QPointF cam_center_; // world XZ center of the map
+    QPointF cam_center_;
 
     // Interaction state
     bool dragging_ = false;
@@ -68,10 +82,25 @@ private:
 
     // Uniform locations
     GLuint u_mvp_ = 0;
-    GLuint u_water_level_ = 0;
+    GLuint u_light_dir_ = 0;
+    GLuint u_lighting_ = 0;
+    GLuint u_use_tex_ = 0;
+    GLuint u_tex_array_ = 0;
+
+    // Texture array
+    GLuint tex_array_ = 0;
+    int tex_count_ = 0;
+    static constexpr int kTexSize_ = 128;
 
     // Whether terrain is loaded
     bool has_terrain_ = false;
+    bool tex_dirty_ = false;
+    bool mesh_dirty_ = false;
+    bool show_texture_ = true;
+
+    MapBuilder* builder_ = nullptr;
+    Wc3Manager* wc3_ = nullptr;
+    static constexpr float kTileSize = 128.0f;
 };
 
 // ============================================================

@@ -11,6 +11,7 @@ add_executable(w3x-gui
     terraineditor.cpp
     placementeditor.cpp
     ../src/core/plugin_registry.cpp
+    ../plugins/terrain_edit/blp_reader.cpp
 )
 
 target_include_directories(w3x-gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

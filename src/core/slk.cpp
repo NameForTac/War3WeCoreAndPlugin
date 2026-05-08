@@ -38,6 +38,7 @@ SLKTable parse(const std::string& text) {
     std::vector<Cell> cells;
     int max_col = 0, max_row = 0;
 
+    int current_row = 0;
     while (std::getline(stream, line)) {
         if (line.empty() || line == "\r") continue;
         if (line.back() == '\r') line.pop_back();
@@ -61,13 +62,13 @@ SLKTable parse(const std::string& text) {
         if (line[0] == 'C') {
             // Cell: C;X{col};Y{row};K{value}
             auto parts = split_slk(line, ';');
-            int col = 0, row = 0;
+            int col = 0;
             std::string value;
             for (auto& p : parts) {
                 if (p.size() >= 2 && p[0] == 'X') {
                     col = std::stoi(p.substr(1));
                 } else if (p.size() >= 2 && p[0] == 'Y') {
-                    row = std::stoi(p.substr(1));
+                    current_row = std::stoi(p.substr(1));
                 } else if (p.size() >= 2 && p[0] == 'K') {
                     value = p.substr(1);
                     // Unquote if quoted
@@ -76,8 +77,8 @@ SLKTable parse(const std::string& text) {
                 }
             }
             max_col = std::max(max_col, col);
-            max_row = std::max(max_row, row);
-            cells.push_back({col, row, value});
+            max_row = std::max(max_row, current_row);
+            cells.push_back({col, current_row, value});
             continue;
         }
         if (line[0] == 'E') {
