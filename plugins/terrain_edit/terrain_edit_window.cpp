@@ -446,6 +446,8 @@ void TerrainEditWindow::selectTool(EditTool tool) {
 // Map lifecycle
 // ============================================================
 void TerrainEditWindow::onMapLoaded(MapBuilder* builder) {
+    qWarning() << "TerrainEditWindow::onMapLoaded: builder=" << (void*)builder
+               << "wc3_=" << (void*)wc3_;
     try {
         builder_ = builder;
         terrain_ = builder->read_terrain();

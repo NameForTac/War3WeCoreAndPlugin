@@ -27,10 +27,13 @@ bool TerrainEditPlugin::init(PluginContext& ctx) {
     window_->setWc3Manager(ctx.wc3);
     open_action_ = new QAction(tr("Terrain Editor..."), nullptr);
     QObject::connect(open_action_, &QAction::triggered, [this]() {
+        qWarning() << "TerrainEditPlugin: menu action triggered, window_=" << (void*)window_;
         if (window_) {
+            qWarning() << "TerrainEditPlugin: showing window, was visible=" << window_->isVisible();
             window_->show();
             window_->raise();
             window_->activateWindow();
+            qWarning() << "TerrainEditPlugin: after show, visible=" << window_->isVisible();
         }
     });
 

@@ -54,9 +54,6 @@ protected:
     void destroyGPUBuffers() override;
 
 private:
-    // Grid
-    void uploadGrid();
-
     // Rendering helpers
     void drawBrushPreview();
     void drawCenterMarker();
@@ -75,13 +72,6 @@ private:
     QColor heightColor(float h) const;
     QColor textureColor(int tex_idx) const;
     QColor tileColor(const QString& tileId, int fallback_idx) const;
-
-    // Grid buffers
-    GLuint grid_vao_ = 0;
-    GLuint grid_vbo_ = 0;
-    int grid_vertex_count_ = 0;
-    bool grid_dirty_ = true;
-    int last_grid_step_ = 1;
 
     // Tool state
     EditTool current_tool_ = EditTool::Raise;

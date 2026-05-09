@@ -15,15 +15,7 @@ TerrainEditWidget::TerrainEditWidget(QWidget* parent)
 }
 
 TerrainEditWidget::~TerrainEditWidget() {
-    // Grid VAO/VBO cleanup (base destructor's virtual dispatch won't reach our override)
-    if (isValid()) {
-        makeCurrent();
-        if (grid_vao_) { glDeleteVertexArrays(1, &grid_vao_); grid_vao_ = 0; }
-        if (grid_vbo_) { glDeleteBuffers(1, &grid_vbo_); grid_vbo_ = 0; }
-        grid_vertex_count_ = 0;
-        doneCurrent();
-    }
-    // Base destructor handles SSBOs, programs, textures cleanup
+    // Base destructor handles programs, textures cleanup (via destroyGPUBuffers + freeTextures)
 }
 
 // ============================================================
@@ -39,6 +31,8 @@ void TerrainEditWidget::loadTerrain(Terrain* terrain) {
     has_terrain_ = (terrain != nullptr);
 
     if (has_terrain_) {
+        // Buffers will be created lazily in paintGL() when the GL context is ready
+        geometry_dirty_ = true;
         tex_dirty_ = true;
         float cx = terrain_->center_offset_x + (terrain_->tile_width - 1) * kTileSize * 0.5f;
         float cz = terrain_->center_offset_y + (terrain_->tile_height - 1) * kTileSize * 0.5f;
@@ -54,7 +48,6 @@ void TerrainEditWidget::loadTerrain(Terrain* terrain) {
         cam_distance_ = qBound(100.0f, needed_dist, 100000.0f);
     }
 
-    last_grid_step_ = 1;
     hover_col_ = -1;
     hover_row_ = -1;
     update();
@@ -144,24 +137,8 @@ void TerrainEditWidget::onBeforePaint() {
 }
 
 void TerrainEditWidget::onAfterPaint() {
-    // Lazy grid upload (initial + LOD changes)
-    if (grid_dirty_) {
-        uploadGrid();
-        grid_dirty_ = false;
-    }
-
     // Disable culling for overlays
     glDisable(GL_CULL_FACE);
-
-    // --- Draw grid overlay ---
-    if (grid_program_ && grid_vertex_count_ > 0) {
-        glUseProgram(grid_program_);
-        glUniformMatrix4fv(u_grid_mvp_, 1, GL_FALSE, last_mvp_.constData());
-        glUniform4f(glGetUniformLocation(grid_program_, "u_color"), 0.35f, 0.35f, 0.35f, 0.6f);
-        glBindVertexArray(grid_vao_);
-        glDrawArrays(GL_LINES, 0, grid_vertex_count_);
-        glBindVertexArray(0);
-    }
 
     // --- Draw brush preview ---
     if (hover_col_ >= 0 && hover_row_ >= 0)
@@ -180,66 +157,6 @@ void TerrainEditWidget::onAfterPaint() {
 // ============================================================
 // Grid with LOD
 // ============================================================
-void TerrainEditWidget::uploadGrid() {
-    if (!terrain_ || !isValid()) return;
-    if (grid_vao_) { glDeleteVertexArrays(1, &grid_vao_); grid_vao_ = 0; }
-    if (grid_vbo_) { glDeleteBuffers(1, &grid_vbo_); grid_vbo_ = 0; }
-    grid_vertex_count_ = 0;
-
-    int cols = terrain_->tile_width;
-    int rows = terrain_->tile_height;
-
-    int step = 1;
-    if (cam_distance_ > 10000.0f) step = 8;
-    else if (cam_distance_ > 5000.0f) step = 4;
-    else if (cam_distance_ > 2000.0f) step = 2;
-
-    int max_dim = qMax(cols, rows);
-    while (step > 1 && max_dim / step < 6) step /= 2;
-
-    std::vector<float> verts;
-
-    // Horizontal lines
-    for (int row = 0; row < rows; row += step) {
-        for (int col = 0; col < cols - 1; ++col) {
-            int idx0 = row * cols + col;
-            int idx1 = row * cols + col + 1;
-            float x0 = terrain_->center_offset_x + col * kTileSize;
-            float z0 = terrain_->center_offset_y + row * kTileSize;
-            float y0 = (terrain_->tilepoints[idx0].height - 8192.0f) * 0.25f + 2.0f;
-            float x1 = terrain_->center_offset_x + (col + 1) * kTileSize;
-            float z1 = terrain_->center_offset_y + row * kTileSize;
-            float y1 = (terrain_->tilepoints[idx1].height - 8192.0f) * 0.25f + 2.0f;
-            verts.insert(verts.end(), {x0, y0, z0, x1, y1, z1});
-        }
-    }
-
-    // Vertical lines
-    for (int col = 0; col < cols; col += step) {
-        for (int row = 0; row < rows - 1; ++row) {
-            int idx0 = row * cols + col;
-            int idx1 = (row + 1) * cols + col;
-            float x0 = terrain_->center_offset_x + col * kTileSize;
-            float z0 = terrain_->center_offset_y + row * kTileSize;
-            float y0 = (terrain_->tilepoints[idx0].height - 8192.0f) * 0.25f + 2.0f;
-            float x1 = terrain_->center_offset_x + col * kTileSize;
-            float z1 = terrain_->center_offset_y + (row + 1) * kTileSize;
-            float y1 = (terrain_->tilepoints[idx1].height - 8192.0f) * 0.25f + 2.0f;
-            verts.insert(verts.end(), {x0, y0, z0, x1, y1, z1});
-        }
-    }
-
-    grid_vertex_count_ = (int)verts.size() / 3;
-    glGenVertexArrays(1, &grid_vao_);
-    glGenBuffers(1, &grid_vbo_);
-    glBindVertexArray(grid_vao_);
-    glBindBuffer(GL_ARRAY_BUFFER, grid_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glBindVertexArray(0);
-}
-
 // ============================================================
 // Brush preview — follows terrain surface
 // ============================================================
@@ -381,6 +298,28 @@ void TerrainEditWidget::drawHelpOverlay() {
     }
     p.setPen(QColor(180, 200, 255));
     p.drawText(mx + 8, my + oh - 10, tr("Render mode") + QStringLiteral(": ") + modeText);
+
+    // Debug overlay — show render state
+    f.setPointSize(8); f.setBold(false); p.setFont(f);
+    int dy = 10;
+    p.fillRect(10, dy - 2, 380, 90, QColor(0, 0, 0, 160));
+    p.setPen(QColor(255, 100, 100));
+    p.drawText(14, dy += 14, QStringLiteral("program=%1 vao=%2 texArray=%3 texCnt=%4 showTex=%5")
+        .arg(program_).arg(vao_).arg(tex_array_).arg(tex_count_).arg(show_texture_));
+    p.drawText(14, dy += 14, QStringLiteral("terrainVao=%1 terrainVbo=%2 verts=%3 geoDirty=%4")
+        .arg(terrain_vao_).arg(terrain_vbo_).arg(terrain_vertex_count_).arg(geometry_dirty_));
+    p.drawText(14, dy += 14, QStringLiteral("hasTer=%1 terrain=%2 w=%3 h=%4 uv_tex=%5")
+        .arg(has_terrain_).arg((quintptr)terrain_, 0, 16)
+        .arg(terrain_ ? terrain_->tile_width : 0)
+        .arg(terrain_ ? terrain_->tile_height : 0)
+        .arg(u_tex_array_));
+    p.drawText(14, dy += 14, QStringLiteral("texMode=%1 light=%2 pitch=%3 yaw=%4 dist=%5")
+        .arg(render_mode_ == RenderMode::Wireframe ? "WIRE" :
+             render_mode_ == RenderMode::Unlit ? "UNLIT" : "LIT")
+        .arg(u_lighting_).arg(cam_pitch_, 0, 'f', 1).arg(cam_yaw_, 0, 'f', 1).arg(cam_distance_, 0, 'f', 0));
+    p.drawText(14, dy += 14, QStringLiteral("showTex=%1 tex_dirty=%2 verts=%3")
+        .arg(show_texture_).arg(tex_dirty_).arg(terrain_vertex_count_));
+
     p.end();
 }
 
@@ -457,10 +396,7 @@ void TerrainEditWidget::applyBrush(int center_col, int center_row) {
         }
     }
 
-    QRect area(min_c, min_r, max_c - min_c + 1, max_r - min_r + 1);
-    updateGroundHeights(area);
-    if (current_tool_ == EditTool::Paint)
-        updateGroundTextures(area);
+    geometry_dirty_ = true;
     update();
 }
 
@@ -518,14 +454,10 @@ void TerrainEditWidget::undo() {
     redo_stack_.push_back(*terrain_);
     *terrain_ = undo_stack_.back();
     undo_stack_.pop_back();
-    int w = terrain_->tile_width, h = terrain_->tile_height;
     destroyGPUBuffers();
     createGPUBuffers();
-    updateGroundHeights({0, 0, w, h});
-    updateGroundTextures({0, 0, w, h});
     hover_col_ = -1; hover_row_ = -1;
     editing_ = false;
-    grid_dirty_ = true;
     emit terrainEdited();
     update();
 }
@@ -535,17 +467,17 @@ void TerrainEditWidget::redo() {
     undo_stack_.push_back(*terrain_);
     *terrain_ = redo_stack_.back();
     redo_stack_.pop_back();
-    int w = terrain_->tile_width, h = terrain_->tile_height;
     destroyGPUBuffers();
     createGPUBuffers();
-    updateGroundHeights({0, 0, w, h});
-    updateGroundTextures({0, 0, w, h});
     hover_col_ = -1; hover_row_ = -1;
     editing_ = false;
-    grid_dirty_ = true;
     emit terrainEdited();
     update();
 }
+
+// ============================================================
+// GPU resource cleanup (extended for grid VAO/VBO)
+// ============================================================
 
 void TerrainEditWidget::focusOnTile(int col, int row) {
     if (!terrain_) return;
@@ -631,16 +563,6 @@ void TerrainEditWidget::mouseReleaseEvent(QMouseEvent* /*event*/) {
 void TerrainEditWidget::wheelEvent(QWheelEvent* event) {
     if (!has_terrain_) return;
     baseWheelEvent(event);
-
-    int new_step = 1;
-    if (cam_distance_ > 10000.0f) new_step = 8;
-    else if (cam_distance_ > 5000.0f) new_step = 4;
-    else if (cam_distance_ > 2000.0f) new_step = 2;
-
-    if (new_step != last_grid_step_) {
-        last_grid_step_ = new_step;
-        grid_dirty_ = true;
-    }
     event->accept();
 }
 
@@ -649,7 +571,4 @@ void TerrainEditWidget::wheelEvent(QWheelEvent* event) {
 // ============================================================
 void TerrainEditWidget::destroyGPUBuffers() {
     TerrainRendererBase::destroyGPUBuffers();
-    if (grid_vao_) { glDeleteVertexArrays(1, &grid_vao_); grid_vao_ = 0; }
-    if (grid_vbo_) { glDeleteBuffers(1, &grid_vbo_); grid_vbo_ = 0; }
-    grid_vertex_count_ = 0;
 }

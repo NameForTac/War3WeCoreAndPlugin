@@ -11,96 +11,41 @@
 #include <cmath>
 
 // ============================================================
-// GLSL 430 core shaders — GPU-driven instanced terrain
+// GLSL shaders — VBO-based terrain rendering (#330, no SSBOs)
 // ============================================================
-static const char* kTerrainVert = R"(
-#version 430 core
-
-layout(location = 0) uniform mat4 u_mvp;
-layout(location = 1) uniform ivec2 u_map_size;
-layout(location = 5) uniform vec2 u_origin;
-
-const float kTileSize = 128.0;
-
-layout(std430, binding = 0) buffer HeightBuf { float heights[]; };
-layout(std430, binding = 1) buffer CliffLevelBuf { float cliff_levels[]; };
-layout(std430, binding = 2) buffer TextureDataBuf { uvec4 tex_data[]; };
-
-layout(location = 0) out vec2 v_uv;
-layout(location = 1) out flat ivec4 v_tex;
-layout(location = 2) out vec3 v_normal;
-
-const vec2 quad[6] = vec2[6](
-    vec2(1.0, 1.0), vec2(0.0, 1.0), vec2(0.0, 0.0),
-    vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0)
-);
-
+static const char* kTerrainVert = R"(#version 330 core
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec2 a_uv;
+layout(location = 2) in float a_tex_layer;
+uniform mat4 u_mvp;
+out vec2 v_uv;
+flat out float v_tex_layer;
 void main() {
-    ivec2 tile_pos = ivec2(gl_InstanceID % (u_map_size.x - 1),
-                           gl_InstanceID / (u_map_size.x - 1));
-    vec2 lv = quad[gl_VertexID];
-    ivec2 c = ivec2(lv) + tile_pos;
-    int idx = c.y * u_map_size.x + c.x;
-    float h = cliff_levels[idx];
-
-    float hL = heights[c.y * u_map_size.x + max(c.x - 1, 0)];
-    float hR = heights[c.y * u_map_size.x + min(c.x + 1, u_map_size.x - 1)];
-    float hD = heights[max(c.y - 1, 0) * u_map_size.x + c.x];
-    float hU = heights[min(c.y + 1, u_map_size.y - 1) * u_map_size.x + c.x];
-    v_normal = normalize(vec3(hL - hR, 2.0 * kTileSize, hD - hU));
-
-    int tile_idx = tile_pos.y * (u_map_size.x - 1) + tile_pos.x;
-    v_tex = ivec4(tex_data[tile_idx]);
-    v_uv = lv;
-    vec2 world_pos = (lv + vec2(tile_pos)) * kTileSize + u_origin;
-    gl_Position = u_mvp * vec4(world_pos.x, h, world_pos.y, 1.0);
+    gl_Position = u_mvp * vec4(a_pos, 1.0);
+    v_uv = a_uv;
+    v_tex_layer = a_tex_layer;
 }
 )";
-
-static const char* kTerrainFrag = R"(
-#version 430 core
-
-layout(location = 2) uniform float u_lighting;
-layout(location = 3) uniform vec3  u_light_dir;
-layout(location = 4) uniform float u_use_tex;
+static const char* kTerrainFrag = R"(#version 330 core
 uniform sampler2DArray u_tex_array;
-
-layout(location = 0) in vec2 v_uv;
-layout(location = 1) in flat ivec4 v_tex;
-layout(location = 2) in vec3 v_normal;
-
-layout(location = 0) out vec4 frag_color;
-
+uniform float u_use_tex;
+uniform vec3 u_light_dir;
+uniform float u_lighting;
+in vec2 v_uv;
+flat in float v_tex_layer;
+out vec4 frag_color;
 void main() {
-    vec2 t = v_uv;
-    float wBL = (1.0 - t.x) * (1.0 - t.y);
-    float wBR = t.x * (1.0 - t.y);
-    float wTL = (1.0 - t.x) * t.y;
-    float wTR = t.x * t.y;
-
-    vec3 color;
-    if (u_use_tex > 0.5) {
-        vec3 c0 = texture(u_tex_array, vec3(t, float(v_tex[0]))).rgb;
-        vec3 c1 = texture(u_tex_array, vec3(t, float(v_tex[1]))).rgb;
-        vec3 c2 = texture(u_tex_array, vec3(t, float(v_tex[2]))).rgb;
-        vec3 c3 = texture(u_tex_array, vec3(t, float(v_tex[3]))).rgb;
-        color = c0 * wBL + c1 * wBR + c2 * wTL + c3 * wTR;
-    } else {
-        color = vec3(0.4, 0.6, 0.3);
-    }
-
-    vec3 N = normalize(v_normal);
-    float diff = max(dot(N, u_light_dir), 0.0);
-    float ambient = 0.3;
-    float lighting = ambient + (1.0 - ambient) * diff;
-    color = mix(color, color * lighting, u_lighting);
-
-    frag_color = vec4(color, 1.0);
+    vec4 color;
+    if (u_use_tex > 0.5)
+        color = texture(u_tex_array, vec3(v_uv, v_tex_layer));
+    else
+        color = vec4(0.4, 0.6, 0.3, 1.0);
+    float light = mix(1.0, 0.3 + 0.7 * max(0.0, dot(normalize(u_light_dir), vec3(0.0, 1.0, 0.0))), u_lighting);
+    frag_color = vec4(color.rgb * light, 1.0);
 }
 )";
 
-static const char* kGridVert = R"(
-#version 330 core
+static const char* kGridVert = R"(#version 330 core
 layout(location = 0) in vec3 a_pos;
 uniform mat4 u_mvp;
 void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }
@@ -187,6 +132,15 @@ TerrainRendererBase::~TerrainRendererBase() {
 }
 
 // ============================================================
+// Debug helper — check GL errors (called from member functions)
+// ============================================================
+#define DBG_GL(msg) do { \
+    GLenum _e = glGetError(); \
+    if (_e != GL_NO_ERROR) \
+        qWarning() << "GL error 0x" + QString::number(_e, 16) << "at" << msg; \
+} while(0)
+
+// ============================================================
 // Shader compilation
 // ============================================================
 GLuint TerrainRendererBase::compileShader(GLenum type, const char* src) {
@@ -198,7 +152,10 @@ GLuint TerrainRendererBase::compileShader(GLenum type, const char* src) {
     if (!ok) {
         char log[512];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        qWarning() << "TerrainRendererBase: shader compile error:" << log;
+        // Print first 80 chars of source for debugging
+        QString srcPreview = QString::fromUtf8(src).left(80).replace('\n', ' ');
+        qWarning() << "TerrainRendererBase: shader compile error:" << log
+                    << "src_preview:" << srcPreview;
         return 0;
     }
     return shader;
@@ -235,12 +192,10 @@ bool TerrainRendererBase::initTerrainShaders() {
     if (!program_) return false;
 
     u_mvp_       = glGetUniformLocation(program_, "u_mvp");
-    u_map_size_  = glGetUniformLocation(program_, "u_map_size");
     u_light_dir_ = glGetUniformLocation(program_, "u_light_dir");
     u_lighting_  = glGetUniformLocation(program_, "u_lighting");
     u_use_tex_   = glGetUniformLocation(program_, "u_use_tex");
     u_tex_array_ = glGetUniformLocation(program_, "u_tex_array");
-    u_origin_    = glGetUniformLocation(program_, "u_origin");
     return true;
 }
 
@@ -377,7 +332,13 @@ void TerrainRendererBase::uploadTextures() {
 
     if (tex_array_) { glDeleteTextures(1, &tex_array_); tex_array_ = 0; }
     tex_count_ = (int)terrain_->ground_tiles.size();
-    if (tex_count_ <= 0) return;
+    if (tex_count_ <= 0) {
+        qWarning() << "TerrainRendererBase::uploadTextures: no ground tiles, abort";
+        return;
+    }
+    qWarning() << "TerrainRendererBase::uploadTextures: loading" << tex_count_ << "tile textures"
+               << "builder_=" << (void*)builder_;
+    DBG_GL("uploadTextures-start");
 
     constexpr int kVariantsPerTile = 32;
     constexpr int kGridCols = 8, kGridRows = 4;
@@ -468,6 +429,10 @@ void TerrainRendererBase::uploadTextures() {
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+    DBG_GL("uploadTextures-end");
+    qWarning() << "TerrainRendererBase::uploadTextures: done, tex_array_=" << tex_array_
+               << "tile_size=" << tile_size_ << "total_layers=" << total_layers;
 }
 
 void TerrainRendererBase::freeTextures() {
@@ -476,98 +441,106 @@ void TerrainRendererBase::freeTextures() {
 }
 
 // ============================================================
-// GPU buffer management (HiveWE-style SSBO)
+// GPU buffer management (VBO-based quad mesh, no SSBOs)
 // ============================================================
 void TerrainRendererBase::createGPUBuffers() {
     if (!terrain_) return;
     int w = terrain_->tile_width;
     int h = terrain_->tile_height;
+    qWarning() << "TerrainRendererBase::createGPUBuffers:" << w << "x" << h
+               << "quads=" << ((w-1)*(h-1));
 
-    gpu_heights_.resize(w * h);
-    gpu_final_heights_.resize(w * h);
-    gpu_texture_data_.resize((w - 1) * (h - 1));
-
-    glGenBuffers(1, &height_ssbo_);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, height_ssbo_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, w * h * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-
-    glGenBuffers(1, &cliff_level_ssbo_);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cliff_level_ssbo_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, w * h * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-
-    glGenBuffers(1, &texture_data_ssbo_);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, texture_data_ssbo_);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, (w - 1) * (h - 1) * sizeof(TileTextureGPU), nullptr, GL_DYNAMIC_DRAW);
+    glGenVertexArrays(1, &terrain_vao_);
+    glGenBuffers(1, &terrain_vbo_);
+    terrain_vertex_count_ = 0;
+    geometry_dirty_ = true;
+    DBG_GL("createGPUBuffers");
 }
 
 void TerrainRendererBase::destroyGPUBuffers() {
     if (!isValid()) return;
-    if (height_ssbo_)       { glDeleteBuffers(1, &height_ssbo_);       height_ssbo_ = 0; }
-    if (cliff_level_ssbo_)  { glDeleteBuffers(1, &cliff_level_ssbo_);  cliff_level_ssbo_ = 0; }
-    if (texture_data_ssbo_) { glDeleteBuffers(1, &texture_data_ssbo_); texture_data_ssbo_ = 0; }
+    if (terrain_vao_) { glDeleteVertexArrays(1, &terrain_vao_); terrain_vao_ = 0; }
+    if (terrain_vbo_) { glDeleteBuffers(1, &terrain_vbo_); terrain_vbo_ = 0; }
+    terrain_vertex_count_ = 0;
 }
 
-void TerrainRendererBase::updateGroundHeights(const QRect& area) {
-    if (!terrain_) return;
-    int w = terrain_->tile_width;
+void TerrainRendererBase::rebuildTerrainGeometry() {
+    if (!terrain_ || !terrain_vao_ || !terrain_vbo_) return;
+    int cols = terrain_->tile_width;
+    int rows = terrain_->tile_height;
+    int quads_x = cols - 1;
+    int quads_y = rows - 1;
+    if (quads_x <= 0 || quads_y <= 0) return;
 
-    for (int y = area.y(); y < area.y() + area.height() && y < terrain_->tile_height; ++y) {
-        for (int x = area.x(); x < area.x() + area.width() && x < terrain_->tile_width; ++x) {
-            size_t idx = (size_t)y * w + x;
-            float raw_h = terrain_->tilepoints[idx].height;
-            gpu_heights_[idx] = raw_h;
-            gpu_final_heights_[idx] = (raw_h - 8192.0f) * 0.25f;
-        }
-    }
+    // Interleaved vertex format: pos3 + uv2 + texLayer1 = 6 floats = 24 bytes
+    // 6 vertices per quad (2 triangles), quads_x * quads_y quads total
+    int total_verts = quads_x * quads_y * 6;
+    std::vector<float> verts;
+    verts.reserve(total_verts * 6);
 
-    size_t byte_count = (size_t)terrain_->tile_height * w * sizeof(float);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, height_ssbo_);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, byte_count, gpu_heights_.data());
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cliff_level_ssbo_);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, byte_count, gpu_final_heights_.data());
-}
+    for (int qy = 0; qy < quads_y; ++qy) {
+        for (int qx = 0; qx < quads_x; ++qx) {
+            // Corner heights from tilepoints (4 corners per quad)
+            int idx_tl = qy * cols + qx;
+            int idx_tr = qy * cols + qx + 1;
+            int idx_bl = (qy + 1) * cols + qx;
+            int idx_br = (qy + 1) * cols + qx + 1;
 
-void TerrainRendererBase::updateGroundTextures(const QRect& area) {
-    if (!terrain_) return;
-    int w = terrain_->tile_width;
-    int h = terrain_->tile_height;
-    int quads_x = w - 1;
-    int quads_y = h - 1;
+            float h_tl = rawToWorldY(terrain_->tilepoints[idx_tl].height);
+            float h_tr = rawToWorldY(terrain_->tilepoints[idx_tr].height);
+            float h_bl = rawToWorldY(terrain_->tilepoints[idx_bl].height);
+            float h_br = rawToWorldY(terrain_->tilepoints[idx_br].height);
 
-    QRect safe = area.adjusted(-1, -1, 1, 1).intersected({0, 0, w, h});
+            float wx = terrain_->center_offset_x + qx * kTileSize;
+            float wz = terrain_->center_offset_y + qy * kTileSize;
+            float ws = kTileSize;
 
-    for (int y = safe.y(); y < safe.y() + safe.height() - 1 && y < quads_y; ++y) {
-        for (int x = safe.x(); x < safe.x() + safe.width() - 1 && x < quads_x; ++x) {
-            uint8_t corner_tex[4] = {
-                realTileTexture(x, y),
-                realTileTexture(x + 1, y),
-                realTileTexture(x, y + 1),
-                realTileTexture(x + 1, y + 1)
+            // Texture layer: use top-left corner texture
+            uint8_t tex = realTileTexture(qx, qy);
+            int layer = (tex < (uint8_t)tex_count_ && tex < (uint8_t)layer_offsets_.size())
+                        ? layer_offsets_[tex] : 0;
+
+            float lt = (float)layer;
+
+            // Two triangles forming a quad:
+            // Tri 1: TL -> TR -> BL
+            // Tri 2: TR -> BR -> BL
+            // Vertex format: x, y, z, u, v, tex_layer  (6 floats)
+            auto push = [&](float x, float y, float z, float u, float v) {
+                verts.push_back(x); verts.push_back(y); verts.push_back(z);
+                verts.push_back(u); verts.push_back(v); verts.push_back(lt);
             };
 
-            TileTextureGPU out{};
-            for (int c = 0; c < 4; ++c) {
-                if (corner_tex[c] < (uint8_t)tex_count_) {
-                    int tex = corner_tex[c];
-                    int corner_x = x + (c & 1);
-                    int corner_y = y + (c >> 1);
-                    int var = 0;
-                    if (corner_x < w && corner_y < h) {
-                        size_t idx = (size_t)corner_y * w + corner_x;
-                        var = getTileVariant(tex, terrain_->tilepoints[idx].texture_detail & 0x1F);
-                    }
-                    out.layers[c] = (uint32_t)(layer_offsets_[tex] + var);
-                } else {
-                    out.layers[c] = 0xFFFFu;
-                }
-            }
-            gpu_texture_data_[(size_t)y * quads_x + x] = out;
+            // Triangle 1
+            push(wx,        h_tl, wz,        0, 0);
+            push(wx + ws,   h_tr, wz,        1, 0);
+            push(wx,        h_bl, wz + ws,   0, 1);
+            // Triangle 2
+            push(wx + ws,   h_tr, wz,        1, 0);
+            push(wx + ws,   h_br, wz + ws,   1, 1);
+            push(wx,        h_bl, wz + ws,   0, 1);
         }
     }
 
-    size_t byte_count = (size_t)quads_y * quads_x * sizeof(TileTextureGPU);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, texture_data_ssbo_);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, byte_count, gpu_texture_data_.data());
+    terrain_vertex_count_ = (int)verts.size() / 6;
+
+    glBindVertexArray(terrain_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, terrain_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
+
+    // a_pos (location 0): 3 floats
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // a_uv (location 1): 2 floats
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    // a_tex_layer (location 2): 1 float
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(5 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    glBindVertexArray(0);
+    geometry_dirty_ = false;
+    DBG_GL("rebuildTerrainGeometry");
 }
 
 // ============================================================
@@ -586,8 +559,20 @@ void TerrainRendererBase::initializeGL() {
     glGenVertexArrays(1, &vao_);
     glBindVertexArray(vao_);
 
+    // Log GL context info for debugging
+    const GLubyte* renderer = glGetString(GL_RENDERER);
+    const GLubyte* version = glGetString(GL_VERSION);
+    const GLubyte* vendor = glGetString(GL_VENDOR);
+    qWarning() << "TerrainRendererBase::initializeGL:"
+               << "renderer=" << (renderer ? (const char*)renderer : "?")
+               << "version=" << (version ? (const char*)version : "?")
+               << "vendor=" << (vendor ? (const char*)vendor : "?")
+               << "vao=" << vao_;
+
     if (!initTerrainShaders())
         qWarning() << "TerrainRendererBase: terrain shader init failed!";
+    else
+        qWarning() << "TerrainRendererBase: terrain shaders OK, program=" << program_;
 }
 
 // ============================================================
@@ -618,11 +603,20 @@ QMatrix4x4 TerrainRendererBase::computeMVPMatrix(float aspect) const {
 }
 
 void TerrainRendererBase::renderTerrain(const QMatrix4x4& mvp) {
+    if (!terrain_ || terrain_vertex_count_ <= 0) return;
+
+    // Rebuild geometry if terrain data changed
+    if (geometry_dirty_) {
+        rebuildTerrainGeometry();
+    }
+
+    // Terrain is a flat mesh — disable back-face culling to avoid
+    // winding-order issues after the perspective transform.
+    glDisable(GL_CULL_FACE);
+
     glUseProgram(program_);
-    glBindVertexArray(vao_);
+    glBindVertexArray(terrain_vao_);
     glUniformMatrix4fv(u_mvp_, 1, GL_FALSE, mvp.constData());
-    glUniform2i(u_map_size_, terrain_->tile_width, terrain_->tile_height);
-    glUniform2f(u_origin_, terrain_->center_offset_x, terrain_->center_offset_y);
     glUniform3f(u_light_dir_, 0.5f, 0.8f, 0.3f);
     glUniform1f(u_lighting_, 1.0f);
 
@@ -635,39 +629,52 @@ void TerrainRendererBase::renderTerrain(const QMatrix4x4& mvp) {
         glUniform1i(u_tex_array_, 0);
     }
 
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, height_ssbo_);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, cliff_level_ssbo_);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, texture_data_ssbo_);
-
     // Derived-class customization (wireframe, unlit)
     onBeforePaint();
 
-    int num_tiles = (terrain_->tile_width - 1) * (terrain_->tile_height - 1);
-    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_tiles);
+    glDrawArrays(GL_TRIANGLES, 0, terrain_vertex_count_);
+    DBG_GL("renderTerrain-draw");
 
     // Restore state for overlays
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glEnable(GL_CULL_FACE);
 }
 
 void TerrainRendererBase::paintGL() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    if (!has_terrain_ || !terrain_ || !program_) return;
+
+    if (!has_terrain_ || !terrain_ || !program_) {
+        qWarning() << "TerrainRendererBase::paintGL early return:"
+                   << "has_terrain_=" << has_terrain_
+                   << "terrain_=" << (void*)terrain_
+                   << "program_=" << program_;
+        return;
+    }
 
     int w = terrain_->tile_width;
     int h = terrain_->tile_height;
     int num_tiles = (w - 1) * (h - 1);
-    if (num_tiles <= 0) return;
+    if (num_tiles <= 0) {
+        qWarning() << "TerrainRendererBase::paintGL early return: no tiles"
+                   << "w=" << w << "h=" << h << "num_tiles=" << num_tiles;
+        return;
+    }
 
     // Lazy texture + buffer init
     if (tex_dirty_) {
+        qWarning() << "TerrainRendererBase::paintGL: textures dirty, loading..."
+                   << "tex_count=" << (terrain_ ? (int)terrain_->ground_tiles.size() : -1);
         if (tex_array_) freeTextures();
         uploadTextures();
         tex_dirty_ = false;
+        qWarning() << "TerrainRendererBase::paintGL: textures done, tex_array_=" << tex_array_
+                   << "tex_count_=" << tex_count_;
     }
-    if (!height_ssbo_) {
+    if (!terrain_vao_) {
+        qWarning() << "TerrainRendererBase::paintGL: creating GPU buffers...";
         createGPUBuffers();
-        updateGroundHeights({0, 0, w, h});
-        updateGroundTextures({0, 0, w, h});
+        rebuildTerrainGeometry();
+        qWarning() << "TerrainRendererBase::paintGL: buffers ready, verts=" << terrain_vertex_count_;
     }
 
     // Camera
