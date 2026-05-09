@@ -435,6 +435,7 @@ void TerrainWidget::upload_textures() {
 
         if (!got_blp) {
             tex_extended_[i] = false;
+            qWarning().noquote() << "[TerrainWidget] BLP fallback for" << tileId << "path=" << mpqPath;
             QImage proc = generate_tile_texture(tileId, i)
                 .scaled(tile_size_, tile_size_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
                 .convertToFormat(QImage::Format_RGB888);

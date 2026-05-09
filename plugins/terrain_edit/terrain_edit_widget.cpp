@@ -487,6 +487,7 @@ void TerrainEditWidget::uploadTextures() {
 
         if (!got_blp) {
             tex_extended_[i] = false;
+            qWarning().noquote() << "[TerrainEdit] BLP fallback for" << tileId << "path=" << mpqPath;
             // Procedural fallback: generate at tile_size_ and repeat for all variants
             QImage proc = generateTileTexture(tileId, i)
                 .scaled(tile_size_, tile_size_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
