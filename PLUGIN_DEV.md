@@ -15,10 +15,15 @@ w3x-packer 支持运行时加载的 DLL 插件。插件通过实现 `IEditorPlug
 │  │  内置插件 (编译入) │  │  外部 DLL 插件   │  │
 │  │  MapInfoPlugin    │  │  sample_tab.dll   │  │
 │  │  FileBrowserPlugin│  │  你的插件 DLL    │  │
-│  │  ObjectEditor...  │  │  w3x_plugin_... │  │
+│  │  ObjectEditor...  │  │  terrain_edit.dll │  │
 │  │  TerrainEditor... │  │                  │  │
 │  │  PlacementEditor  │  │                  │  │
 │  └──────────────────┘  └──────────────────┘  │
+│                                                │
+│  TerrainRendererBase (抽象基类: SSBO/BLP/相机) │
+│  ├─ TerrainWidget (内置, gui/terraineditor)   │
+│  └─ TerrainEditWidget (插件, terrain_edit.dll)│
+│                                                │
 ├──────────────────────────────────────────────┤
 │  PluginContext                                │
 │  (MapBuilder* + MetaDataDB* + 父窗口)         │
@@ -227,7 +232,7 @@ PluginCapability capabilities() const override {
 |------|----------------------|----------|
 | **注册方式** | `PluginRegistry::register_plugin()` | DLL 导出 `w3x_plugin_create()` |
 | **构建** | 编译入 w3x-gui.exe | 单独编译为 .dll |
-| **链接** | 可直接使用 gui/ 内部类 | 仅能链接 w3x_core + Qt |
+| **链接** | 可直接使用 gui/ 内部类 | 仅能链接 w3x_core + Qt；如需继承 TerrainRendererBase，必须把 terrain_renderer_base.cpp 编译进 DLL（见「地形编辑器插件」） |
 | **部署** | 随主程序发布 | 放入 plugins/ 目录 |
 | **适用场景** | 核心编辑器功能 | 第三方扩展 |
 
@@ -243,6 +248,91 @@ reg.register_plugin(std::make_unique<ObjectEditorPlugin>(&meta_db_));
 reg.load_directory(plugin_dir_);
 reg.init_all(ctx);
 ```
+
+## 地形编辑器插件
+
+地形编辑器插件通过继承 `TerrainRendererBase`（位于 `gui/terrain_renderer_base.h`）来复用完整的 3D 地形渲染管线：SSBO 实例化渲染、BLP 纹理阵列加载、3D 轨道相机控制。
+
+### TerrainRendererBase 提供的功能
+
+| 功能 | 说明 |
+|------|------|
+| **SSBO 实例化渲染** | 使用 OpenGL 4.3 SSBO + 间接实例化绘制，单 drawcall 渲染全部地块 |
+| **BLP 纹理阵列** | 自动从 MPQ 或本地 Data/ 目录加载 BLP 贴图，构建 GL_TEXTURE_2D_ARRAY |
+| **3D 轨道相机** | 鼠标拖拽旋转、右键平移、滚轮缩放，由基类统一管理 |
+| **虚钩子** | `onBeforePaint()` / `onAfterPaint()` — 在渲染前后插入自定义绘制 |
+| **地形数据** | 通过 `terrain_` 指针访问 `Terrain` 结构，调用 `updateGroundHeights()` / `updateGroundTextures()` 更新 GPU 缓冲区 |
+
+### 继承 TerrainRendererBase
+
+```cpp
+#include "gui/terrain_renderer_base.h"
+
+class MyTerrainWidget : public TerrainRendererBase {
+    Q_OBJECT
+public:
+    explicit MyTerrainWidget(QWidget* parent = nullptr);
+    ~MyTerrainWidget() override;
+
+protected:
+    void initializeGL() override;
+    void onBeforePaint() override;   // 自定义渲染前逻辑（例如切换线框模式）
+    void onAfterPaint() override;    // 自定义叠加绘制（例如笔刷预览、网格）
+    void destroyGPUBuffers() override; // 清理派生类 OpenGL 资源
+};
+```
+
+### CMakeLists.txt 要点
+
+DLL 插件必须**将 `terrain_renderer_base.cpp` 编译进自己的 DLL**，因为运行时加载的 DLL 无法链接 w3x-gui.exe 的符号：
+
+```cmake
+add_library(my_terrain_edit SHARED
+    my_terrain_edit.cpp
+    my_terrain_widget.cpp
+    ${CMAKE_SOURCE_DIR}/gui/terrain_renderer_base.cpp  # ← 必须：编译基类到 DLL
+)
+
+target_include_directories(my_terrain_edit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src          # plugin.h / MapBuilder
+    ${CMAKE_SOURCE_DIR}/gui          # terrain_renderer_base.h
+)
+
+target_link_libraries(my_terrain_edit PRIVATE
+    w3x_core
+    Qt::Widgets
+    Qt::OpenGLWidgets                # ← 需要 OpenGLWidgets 模块
+)
+
+set_target_properties(my_terrain_edit PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins"
+)
+```
+
+### 重要注意事项
+
+1. **Double-DLL 问题**：`terrain_renderer_base.cpp` 同时编译进 w3x-gui.exe 和插件 DLL，两者的 `TerrainRendererBase` 类型是不同的编译单元。这通常不是问题，因为插件通过 `IEditorPlugin` 接口交互，不是通过基类指针跨模块传递。
+2. **析构函数虚分派**：基类析构函数中虚函数分派指向基类而非派生类。如果派生类持有 OpenGL 资源（如 VAO/VBO），必须在**派生类析构函数**中显式释放，不能依赖 `destroyGPUBuffers()` 虚函数：
+   ```cpp
+   MyTerrainWidget::~MyTerrainWidget() {
+       makeCurrent();
+       if (grid_vao_) glDeleteVertexArrays(1, &grid_vao_);
+       if (grid_vbo_) glDeleteBuffers(1, &grid_vbo_);
+       doneCurrent();
+   }
+   ```
+3. **鼠标事件**：基类提供 `baseMousePressEvent()`/`baseMouseMoveEvent()`/`baseMouseReleaseEvent()` 和 `baseWheelEvent()` 处理相机控制。派生类应在覆盖的 Qt 事件中调用基类方法：
+   ```cpp
+   void MyTerrainWidget::mousePressEvent(QMouseEvent* event) override {
+       if (event->button() == Qt::LeftButton && !camera_operation_active()) {
+           // 处理笔刷点击
+           return;
+       }
+       baseMousePressEvent(event);  // 基类相机控制
+   }
+   ```
+4. **参考实现**：`plugins/terrain_edit/terrain_edit_widget.h/cpp` 是完整的继承示例，包含网格叠加、笔刷预览、撤销/重做、编辑工具等。
 
 ## PluginContext
 
@@ -468,12 +558,14 @@ w3x-packer/
 │   ├── mapinfopage.h/cpp     ← MapInfoPlugin (ProvidesTab|NeedsSavable)
 │   ├── filebrowser.h/cpp     ← FileBrowserPlugin (ProvidesTab)
 │   ├── objecteditor.h/cpp    ← ObjectEditorPlugin (ProvidesTab|NeedsSavable)
-│   ├── terraineditor.h/cpp   ← TerrainEditorPlugin (ProvidesTab)
+│   ├── terrain_renderer_base.h/cpp ← 3D 地形渲染基类 (供内置+插件共用)
+│   ├── terraineditor.h/cpp   ← TerrainEditorPlugin (ProvidesTab，继承 TerrainRendererBase)
 │   ├── placementeditor.h/cpp ← PlacementEditorPlugin (ProvidesTab)
 │   └── settingsdialog.h/cpp  ← 设置对话框
 ├── plugins/                   ← 外部插件 DLL 构建
 │   ├── CMakeLists.txt
-│   └── sample_tab/           ← 示例插件
+│   ├── sample_tab/           ← 示例插件
+│   └── terrain_edit/         ← 地形编辑器插件 (继承 TerrainRendererBase，独立窗口)
 └── dist/GUI/plugins/          ← 构建产物：插件 DLL 目录
 ```
 

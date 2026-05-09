@@ -1,22 +1,15 @@
 #pragma once
 
-#include <QOpenGLWidget>
-#include <QOpenGLFunctions_3_3_Core>
-#include <QMouseEvent>
-#include <QWheelEvent>
-#include <QMatrix4x4>
-#include <QVector3D>
-#include <QImage>
-#include <vector>
-#include <string>
+#include "../../gui/terrain_renderer_base.h"
 #include "terrain_edit_types.h"
 #include "../../src/core/w3e.h"
+#include <QImage>
+#include <vector>
 
 class Wc3Manager;
-
 class MapBuilder;
 
-class TerrainEditWidget : public QOpenGLWidget, protected QOpenGLFunctions_3_3_Core {
+class TerrainEditWidget : public TerrainRendererBase {
     Q_OBJECT
 public:
     explicit TerrainEditWidget(QWidget* parent = nullptr);
@@ -24,13 +17,13 @@ public:
 
     void loadTerrain(Terrain* terrain);
     void setBuilder(MapBuilder* builder) { builder_ = builder; }
-    void setWc3Manager(Wc3Manager* mgr) { wc3_ = mgr; tex_dirty_ = true; update(); }
+    void setWc3Manager(Wc3Manager* mgr) { TerrainRendererBase::setWc3Manager(mgr); }
 
     void setTool(EditTool tool) { current_tool_ = tool; update(); }
     void setBrushSize(int size) { brush_size_ = std::max(1, size); update(); }
     void setBrushStrength(float strength) { brush_strength_ = strength; }
     void setPaintTexture(int idx) { paint_texture_ = idx; update(); }
-    void setShowTexture(bool on) { show_texture_ = on; mesh_dirty_ = true; update(); }
+    void setShowTexture(bool on) { show_texture_ = on; update(); }
     void setBrushShape(BrushShape shape) { brush_shape_ = shape; update(); }
     BrushShape brushShape() const { return brush_shape_; }
     void setRenderMode(RenderMode mode) { render_mode_ = mode; update(); }
@@ -52,31 +45,21 @@ signals:
 
 protected:
     void initializeGL() override;
-    void paintGL() override;
-    void resizeGL(int w, int h) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void onBeforePaint() override;
+    void onAfterPaint() override;
+    void destroyGPUBuffers() override;
 
 private:
-    // Rendering
-    void buildMesh();
-    void uploadMesh();
+    // Grid
     void uploadGrid();
+
+    // Rendering helpers
     void drawBrushPreview();
-
-    // Shaders
-    GLuint compileShader(GLenum type, const char* src);
-    GLuint linkProgram(GLuint vs, GLuint fs);
-
-    // Textures
-    void uploadTextures();
-    QImage generateTileTexture(const QString& tileId, int idx);
-    QImage generateNoiseTexture(int w, int h, const QColor& base, const QColor& var, float scale);
-    void freeTextures();
-
-    // Help overlay
+    void drawCenterMarker();
     void drawHelpOverlay();
 
     // Editing
@@ -88,56 +71,17 @@ private:
     void flattenOp(int col, int row, float dist, float radius);
     void paintOp(int col, int row, float dist, float radius);
 
+    // Color helpers
     QColor heightColor(float h) const;
     QColor textureColor(int tex_idx) const;
     QColor tileColor(const QString& tileId, int fallback_idx) const;
 
-    // Terrain data (pointer to window's copy)
-    Terrain* terrain_ = nullptr;
-    MapBuilder* builder_ = nullptr;
-    Wc3Manager* wc3_ = nullptr;
-
-    // Camera
-    float cam_yaw_ = -45.0f;
-    float cam_pitch_ = -35.0f;
-    float cam_distance_ = 800.0f;
-    QPointF cam_center_;
-
-    // Interaction state
-    bool dragging_ = false;
-    int drag_button_ = 0;
-    QPointF last_mouse_pos_;
-    int hover_col_ = -1;
-    int hover_row_ = -1;
-    bool editing_ = false;
-
-    // Flatten target height (captured on first click)
-    float flatten_target_ = 0;
-
-    // OpenGL state
-    GLuint program_ = 0;
-    GLuint vao_ = 0;
-    GLuint vbo_ = 0;
-    GLuint ebo_ = 0;
-    int vertex_count_ = 0;
-    int index_count_ = 0;
-    GLuint u_mvp_ = 0;
-    GLuint u_light_dir_ = 0;
-    GLuint u_lighting_ = 0;
-    GLuint u_use_tex_ = 0;
-    GLuint u_tex_array_ = 0;
-
-    GLuint tex_array_ = 0;
-    int tex_count_ = 0;
-    int tile_size_ = 64;
-    std::vector<int> layer_offsets_;
-    std::vector<bool> tex_extended_;
-
+    // Grid buffers
     GLuint grid_vao_ = 0;
     GLuint grid_vbo_ = 0;
     int grid_vertex_count_ = 0;
-    GLuint grid_program_ = 0;
-    GLuint u_grid_mvp_ = 0;
+    bool grid_dirty_ = true;
+    int last_grid_step_ = 1;
 
     // Tool state
     EditTool current_tool_ = EditTool::Raise;
@@ -146,15 +90,14 @@ private:
     int paint_texture_ = 0;
     BrushShape brush_shape_ = BrushShape::Circle;
     RenderMode render_mode_ = RenderMode::Lit;
-    bool show_texture_ = true;
-    bool has_terrain_ = false;
-    bool mesh_dirty_ = false;
-    bool tex_dirty_ = false;
+    int hover_col_ = -1;
+    int hover_row_ = -1;
+    bool editing_ = false;
+    float flatten_target_ = 0;
 
-    static constexpr float kTileSize = 128.0f;
     static constexpr int kMaxUndo_ = 60;
 
-    // Undo / redo stacks (each holds a full Terrain copy)
+    // Undo / redo stacks
     std::vector<Terrain> undo_stack_;
     std::vector<Terrain> redo_stack_;
 };

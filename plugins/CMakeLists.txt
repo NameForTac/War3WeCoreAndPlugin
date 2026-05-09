@@ -26,6 +26,7 @@ add_library(terrain_edit SHARED
     terrain_edit/terrain_edit_window.cpp
     terrain_edit/terrain_edit_widget.cpp
     terrain_edit/blp_reader.cpp
+    ../gui/terrain_renderer_base.cpp
 )
 
 target_include_directories(terrain_edit PRIVATE ${CMAKE_SOURCE_DIR}/src)

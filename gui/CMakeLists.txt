@@ -10,6 +10,7 @@ add_executable(w3x-gui
     settingsdialog.cpp
     terraineditor.cpp
     placementeditor.cpp
+    terrain_renderer_base.cpp
     ../src/core/plugin_registry.cpp
     ../plugins/terrain_edit/blp_reader.cpp
 )

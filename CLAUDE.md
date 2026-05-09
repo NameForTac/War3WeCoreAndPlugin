@@ -40,14 +40,22 @@ w3x-packer/
 │   ├── mapinfopage.h/cpp     # 地图信息页插件 (MapInfoPlugin)
 │   ├── filebrowser.h/cpp     # 文件浏览器插件 (FileBrowserPlugin)
 │   ├── objecteditor.h/cpp    # 对象编辑器插件 (ObjectEditorPlugin)
-│   ├── terraineditor.h/cpp   # 3D 地形编辑器插件 (TerrainEditorPlugin)
+│   ├── terrain_renderer_base.h/cpp  # 3D 地形渲染基类 (SSBO/GPU/BLP/轨道相机，供内置+插件共用)
+│   ├── terraineditor.h/cpp   # 3D 地形编辑器插件 (TerrainEditorPlugin，继承 TerrainRendererBase)
 │   ├── placementeditor.h/cpp # 2D 单位/装饰物摆放编辑器插件 (PlacementEditorPlugin)
 │   └── settingsdialog.h/cpp  # 设置对话框 (含插件目录 + WC3 数据目录)
 ├── plugins/                  # 外部插件 DLL 构建
 │   ├── CMakeLists.txt
-│   └── sample_tab/           # 样例插件 (Map Statistics)
-│       ├── sample_tab.h
-│       └── sample_tab.cpp
+│   ├── sample_tab/           # 样例插件 (Map Statistics)
+│   │   ├── sample_tab.h
+│   │   └── sample_tab.cpp
+│   └── terrain_edit/         # 独立窗口地形编辑器插件 (继承 TerrainRendererBase)
+│       ├── terrain_edit_plugin.h/cpp
+│       ├── terrain_edit_window.h/cpp
+│       ├── terrain_edit_widget.h/cpp
+│       ├── terrain_edit_types.h
+│       ├── blp_reader.h/cpp
+│       └── translations/
 ├── translations/
 │   ├── w3x-packer_zh_CN.ts   # 中文本地化源
 │   └── w3x-packer_zh_CN.qm   # 编译后的翻译文件
@@ -117,7 +125,8 @@ build.ps1 自动执行上述步骤并组织 dist/ 目录：
 | **metadata** | `core/metadata.h/cpp` | MetaDataDB：加载 SLK 元数据 + *strings.txt 对象名称 + WESTRING 键解析 |
 | **plugin** | `core/plugin.h` | IEditorPlugin 纯虚基类，PluginCapability 位域，PluginContext |
 | **plugin_registry** | `core/plugin_registry.h/cpp` | 插件注册中心单例，内置 + DLL 插件生命周期管理 |
-| **terraineditor** | `gui/terraineditor.h/cpp` | 3D 地形编辑器，QOpenGLWidget + IEditorPlugin 包装；VBO 网格渲染、高度着色、3D 轨道相机 |
+| **terrain_renderer_base** | `gui/terrain_renderer_base.h/cpp` | 3D 地形渲染抽象基类，QOpenGLWidget + QOpenGLFunctions_4_3_Core；SSBO 实例化渲染、BLP 纹理阵列、3D 轨道相机，含 onBeforePaint/onAfterPaint 虚钩子供派生类定制 |
+| **terraineditor** | `gui/terraineditor.h/cpp` | 3D 地形编辑器内置插件 (TerrainEditorPlugin)，继承 TerrainRendererBase，轻量包装提供 load_terrain/clear_terrain |
 | **placementeditor** | `gui/placementeditor.h/cpp` | 2D 单位/装饰物摆放编辑器，QPainter 俯视图渲染，玩家颜色点，悬停提示 |
 | **doo** | `core/doo.h/cpp` | war3map.doo 装饰物格式解析，PlacedDoodad/DropItemSet/PlacedDoodads 结构 |
 | **units_doo** | `core/units_doo.h/cpp` | war3mapunits.doo 单位格式解析，PlacedUnit 含背包/技能/随机数据 |
@@ -160,6 +169,7 @@ w3x_packer dump  <input.w3x> <file>       # Hex dump MPQ 内指定文件
 - CLI 不支持从目录打包为 .w3x 功能（pack 子命令仅做 .w3x→.w3x 重新打包）
 - 构建默认不启用 GUI（`-DWITH_GUI=ON` 开启 Qt6 依赖）
 - Windows-only 代码（使用 `_mkdir`、`_chdir` 等 MSVC/MinGW CRT API）
+- **Double-DLL 模式**：`terrain_renderer_base.cpp` 同时编译进 w3x-gui.exe 和地形插件 DLL。运行时加载的插件 DLL 无法链接 exe 符号，因此基类 .cpp 必须在插件 CMake 中额外添加一份编译。见 PLUGIN_DEV.md「地形编辑器插件」章节。
 
 ## i18n 约定
 
@@ -173,6 +183,8 @@ w3x_packer dump  <input.w3x> <file>       # Hex dump MPQ 内指定文件
 
 所有编辑器功能均为 `IEditorPlugin` 实现，MainWindow 不感知具体编辑器类型。
 
+内置的地形编辑器 (TerrainEditorPlugin) 和插件的地形编辑器 (TerrainEditWidget) 共享 `TerrainRendererBase` 基类，该基类封装了所有 OpenGL 渲染逻辑（SSBO 实例化、BLP 纹理加载、轨道相机）。
+
 ### 层次
 
 ```
@@ -180,14 +192,18 @@ MainWindow (仅核心：打开/保存/列出文件)
     │
     └── PluginRegistry (单例，管理插件生命周期)
             ├── 内置插件 (编译进 GUI)
-            │   ├── MapInfoPlugin      (ProvidesTab | NeedsSavable)
-            │   ├── FileBrowserPlugin  (ProvidesTab)
-            │   ├── ObjectEditorPlugin (ProvidesTab | NeedsSavable)
-            │   ├── TerrainEditorPlugin (ProvidesTab)
-            │   └── PlacementEditorPlugin (ProvidesTab)
+            │   ├── MapInfoPlugin            (ProvidesTab | NeedsSavable)
+            │   ├── FileBrowserPlugin        (ProvidesTab)
+            │   ├── ObjectEditorPlugin       (ProvidesTab | NeedsSavable)
+            │   ├── TerrainEditorPlugin      (ProvidesTab，含 TerrainWidget : TerrainRendererBase)
+            │   └── PlacementEditorPlugin    (ProvidesTab)
+            │
+            ├── TerrainRendererBase          ← 抽象基类，共享渲染逻辑
+            │   └── TerrainEditWidget (插件，位于 terrain_edit.dll)
             │
             └── 外部插件 DLL (运行时加载)
-                └── sample_tab.dll
+                ├── sample_tab.dll
+                └── terrain_edit.dll          (TerrainEditWindow + TerrainEditWidget)
 ```
 
 ### IEditorPlugin 接口 (`src/core/plugin.h`)
