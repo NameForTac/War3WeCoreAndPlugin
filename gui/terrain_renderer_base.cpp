@@ -13,17 +13,28 @@
 // ============================================================
 // GLSL shaders — VBO-based terrain rendering (#330, no SSBOs)
 // ============================================================
+// Dual-texture blending shaders.
+// Each quad is split into 4 triangles, each with a provoking vertex at
+// a specific corner. The corner carries blend info (layer2, blend) so
+// that the fragment shader mixes the tile's own texture with adjacent
+// tiles' textures, eliminating hard seams.
 static const char* kTerrainVert = R"(#version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec2 a_uv;
-layout(location = 2) in float a_tex_layer;
+layout(location = 2) in float a_layer1;
+layout(location = 3) in float a_layer2;
+layout(location = 4) in float a_blend;
 uniform mat4 u_mvp;
 out vec2 v_uv;
-flat out float v_tex_layer;
+flat out float v_layer1;
+flat out float v_layer2;
+flat out float v_blend;
 void main() {
     gl_Position = u_mvp * vec4(a_pos, 1.0);
     v_uv = a_uv;
-    v_tex_layer = a_tex_layer;
+    v_layer1 = a_layer1;
+    v_layer2 = a_layer2;
+    v_blend = a_blend;
 }
 )";
 static const char* kTerrainFrag = R"(#version 330 core
@@ -32,14 +43,19 @@ uniform float u_use_tex;
 uniform vec3 u_light_dir;
 uniform float u_lighting;
 in vec2 v_uv;
-flat in float v_tex_layer;
+flat in float v_layer1;
+flat in float v_layer2;
+flat in float v_blend;
 out vec4 frag_color;
 void main() {
     vec4 color;
-    if (u_use_tex > 0.5)
-        color = texture(u_tex_array, vec3(v_uv, v_tex_layer));
-    else
+    if (u_use_tex > 0.5) {
+        vec4 c1 = texture(u_tex_array, vec3(v_uv, v_layer1));
+        vec4 c2 = texture(u_tex_array, vec3(v_uv, v_layer2));
+        color = mix(c1, c2, v_blend);
+    } else {
         color = vec4(0.4, 0.6, 0.3, 1.0);
+    }
     float light = mix(1.0, 0.3 + 0.7 * max(0.0, dot(normalize(u_light_dir), vec3(0.0, 1.0, 0.0))), u_lighting);
     frag_color = vec4(color.rgb * light, 1.0);
 }
@@ -472,15 +488,15 @@ void TerrainRendererBase::rebuildTerrainGeometry() {
     int quads_y = rows - 1;
     if (quads_x <= 0 || quads_y <= 0) return;
 
-    // Interleaved vertex format: pos3 + uv2 + texLayer1 = 6 floats = 24 bytes
-    // 6 vertices per quad (2 triangles), quads_x * quads_y quads total
-    int total_verts = quads_x * quads_y * 6;
+    // Vertex format: pos3 + uv2 + layer1 + layer2 + blend = 8 floats = 32 bytes
+    // 12 vertices per quad (4 triangles), quads_x * quads_y quads total
+    constexpr int kFloatsPerVert = 8;
+    int total_verts = quads_x * quads_y * 12;
     std::vector<float> verts;
-    verts.reserve(total_verts * 6);
+    verts.reserve(total_verts * kFloatsPerVert);
 
     for (int qy = 0; qy < quads_y; ++qy) {
         for (int qx = 0; qx < quads_x; ++qx) {
-            // Corner heights from tilepoints (4 corners per quad)
             int idx_tl = qy * cols + qx;
             int idx_tr = qy * cols + qx + 1;
             int idx_bl = (qy + 1) * cols + qx;
@@ -495,48 +511,97 @@ void TerrainRendererBase::rebuildTerrainGeometry() {
             float wz = terrain_->center_offset_y + qy * kTileSize;
             float ws = kTileSize;
 
-            // Texture layer: use top-left corner texture
-            uint8_t tex = realTileTexture(qx, qy);
-            int layer = (tex < (uint8_t)tex_count_ && tex < (uint8_t)layer_offsets_.size())
-                        ? layer_offsets_[tex] : 0;
+            uint8_t self_tex = realTileTexture(qx, qy);
+            int self_layer = (self_tex < (uint8_t)tex_count_ && self_tex < (uint8_t)layer_offsets_.size())
+                             ? layer_offsets_[self_tex] : 0;
 
-            float lt = (float)layer;
-
-            // Two triangles forming a quad:
-            // Tri 1: TL -> TR -> BL
-            // Tri 2: TR -> BR -> BL
-            // Vertex format: x, y, z, u, v, tex_layer  (6 floats)
-            auto push = [&](float x, float y, float z, float u, float v) {
-                verts.push_back(x); verts.push_back(y); verts.push_back(z);
-                verts.push_back(u); verts.push_back(v); verts.push_back(lt);
+            // ---- Blend computation ----
+            // For each corner, examine the up-to-4 tiles that meet at that vertex.
+            // layer2 = most common *different* texture among neighbors
+            // blend  = proportion of non-self tiles among the 4
+            auto cornerBlend = [&](int cx, int cy) -> std::pair<int, float> {
+                int vx = qx + cx, vy = qy + cy;
+                int counts[256] = {0};
+                int total_other = 0;
+                for (int dy = -1; dy <= 0; ++dy) {
+                    for (int dx = -1; dx <= 0; ++dx) {
+                        int tx = vx + dx, ty = vy + dy;
+                        if (tx < 0 || tx >= quads_x || ty < 0 || ty >= quads_y)
+                            continue;
+                        int t = realTileTexture(tx, ty);
+                        if (t != self_tex) { ++counts[t]; ++total_other; }
+                    }
+                }
+                if (total_other == 0)
+                    return {self_layer, 0.0f};
+                int best_tex = self_tex, best_cnt = 0;
+                for (int i = 0; i < 256; ++i)
+                    if (counts[i] > best_cnt) { best_cnt = counts[i]; best_tex = i; }
+                int other_layer = (best_tex < tex_count_ && best_tex < (int)layer_offsets_.size())
+                                  ? layer_offsets_[best_tex] : self_layer;
+                return {other_layer, std::min(1.0f, total_other / 4.0f)};
             };
 
-            // Triangle 1
-            push(wx,        h_tl, wz,        0, 0);
-            push(wx + ws,   h_tr, wz,        1, 0);
-            push(wx,        h_bl, wz + ws,   0, 1);
-            // Triangle 2
-            push(wx + ws,   h_tr, wz,        1, 0);
-            push(wx + ws,   h_br, wz + ws,   1, 1);
-            push(wx,        h_bl, wz + ws,   0, 1);
+            auto [l_TL, b_TL] = cornerBlend(0, 0);
+            auto [l_TR, b_TR] = cornerBlend(1, 0);
+            auto [l_BL, b_BL] = cornerBlend(0, 1);
+            auto [l_BR, b_BR] = cornerBlend(1, 1);
+
+            // Quad center
+            float cx = wx + ws * 0.5f;
+            float cz = wz + ws * 0.5f;
+            float ch = (h_tl + h_tr + h_bl + h_br) * 0.25f;
+
+            auto push = [&](float x, float y, float z, float u, float v,
+                            int l2, float bl) {
+                verts.push_back(x); verts.push_back(y); verts.push_back(z);
+                verts.push_back(u); verts.push_back(v);
+                verts.push_back((float)self_layer);
+                verts.push_back((float)l2);
+                verts.push_back(bl);
+            };
+
+            // 4 triangles per quad, provoking vertex = LAST = corner
+            // Tri 1: TL -> center -> TR  (provoking=TR, right edge)
+            push(wx,      h_tl, wz,      0,   0,   l_TL, b_TL);
+            push(cx,      ch,   cz,      0.5f,0.5f, 0,    0);
+            push(wx+ws,   h_tr, wz,      1,   0,   l_TR, b_TR);
+            // Tri 2: TR -> center -> BR  (provoking=BR, bottom-right)
+            push(wx+ws,   h_tr, wz,      1,   0,   l_TR, b_TR);
+            push(cx,      ch,   cz,      0.5f,0.5f, 0,    0);
+            push(wx+ws,   h_br, wz+ws,   1,   1,   l_BR, b_BR);
+            // Tri 3: BR -> center -> BL  (provoking=BL, bottom-left)
+            push(wx+ws,   h_br, wz+ws,   1,   1,   l_BR, b_BR);
+            push(cx,      ch,   cz,      0.5f,0.5f, 0,    0);
+            push(wx,      h_bl, wz+ws,   0,   1,   l_BL, b_BL);
+            // Tri 4: BL -> center -> TL  (provoking=TL, top-left)
+            push(wx,      h_bl, wz+ws,   0,   1,   l_BL, b_BL);
+            push(cx,      ch,   cz,      0.5f,0.5f, 0,    0);
+            push(wx,      h_tl, wz,      0,   0,   l_TL, b_TL);
         }
     }
 
-    terrain_vertex_count_ = (int)verts.size() / 6;
+    terrain_vertex_count_ = (int)verts.size() / kFloatsPerVert;
 
     glBindVertexArray(terrain_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, terrain_vbo_);
     glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
 
-    // a_pos (location 0): 3 floats
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    // a_pos  (location 0): 3 floats
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    // a_uv (location 1): 2 floats
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    // a_uv   (location 1): 2 floats
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
-    // a_tex_layer (location 2): 1 float
-    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(5 * sizeof(float)));
+    // a_layer1 (location 2): 1 float
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(5 * sizeof(float)));
     glEnableVertexAttribArray(2);
+    // a_layer2 (location 3): 1 float
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+    glEnableVertexAttribArray(3);
+    // a_blend  (location 4): 1 float
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(7 * sizeof(float)));
+    glEnableVertexAttribArray(4);
 
     glBindVertexArray(0);
     geometry_dirty_ = false;
