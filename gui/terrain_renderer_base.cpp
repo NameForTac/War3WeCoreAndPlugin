@@ -179,6 +179,7 @@ TerrainRendererBase::TerrainRendererBase(QWidget* parent)
 TerrainRendererBase::~TerrainRendererBase() {
     makeCurrent();
     destroyGPUBuffers();
+    if (vao_)           glDeleteVertexArrays(1, &vao_);
     if (program_)       glDeleteProgram(program_);
     if (grid_program_)  glDeleteProgram(grid_program_);
     if (tex_array_)     glDeleteTextures(1, &tex_array_);
@@ -501,7 +502,6 @@ void TerrainRendererBase::createGPUBuffers() {
 
 void TerrainRendererBase::destroyGPUBuffers() {
     if (!isValid()) return;
-    if (vao_)               { glDeleteVertexArrays(1, &vao_);          vao_ = 0; }
     if (height_ssbo_)       { glDeleteBuffers(1, &height_ssbo_);       height_ssbo_ = 0; }
     if (cliff_level_ssbo_)  { glDeleteBuffers(1, &cliff_level_ssbo_);  cliff_level_ssbo_ = 0; }
     if (texture_data_ssbo_) { glDeleteBuffers(1, &texture_data_ssbo_); texture_data_ssbo_ = 0; }
