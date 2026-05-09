@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QSurfaceFormat>
 #include <QTranslator>
 #include <QLibraryInfo>
 #include <QLocale>
@@ -6,6 +7,13 @@
 #include "mainwindow.h"
 
 int main(int argc, char* argv[]) {
+    // Request OpenGL 4.3 Core Profile for SSBO instanced terrain rendering
+    QSurfaceFormat fmt;
+    fmt.setVersion(4, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    fmt.setDepthBufferSize(24);
+    QSurfaceFormat::setDefaultFormat(fmt);
+
     QApplication app(argc, argv);
     app.setApplicationName("w3x-packer");
     app.setApplicationVersion("0.1.0");

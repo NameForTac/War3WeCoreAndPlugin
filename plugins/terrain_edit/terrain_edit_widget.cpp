@@ -246,6 +246,20 @@ void TerrainEditWidget::uploadGrid() {
 void TerrainEditWidget::drawBrushPreview() {
     if (!terrain_ || !grid_program_) return;
 
+    auto draw_verts = [&](const float* verts, int count, int stride) {
+        glBindVertexArray(vao_);
+        GLuint tmp_vbo;
+        glGenBuffers(1, &tmp_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, tmp_vbo);
+        glBufferData(GL_ARRAY_BUFFER, count * stride, verts, GL_STREAM_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
+        glEnableVertexAttribArray(0);
+        glDrawArrays(GL_LINE_LOOP, 0, count);
+        glDisableVertexAttribArray(0);
+        glDeleteBuffers(1, &tmp_vbo);
+        glBindVertexArray(0);
+    };
+
     float cx = terrain_->center_offset_x + hover_col_ * kTileSize;
     float cz = terrain_->center_offset_y + hover_row_ * kTileSize;
     float radius_world = brush_size_ * kTileSize;
@@ -274,10 +288,7 @@ void TerrainEditWidget::drawBrushPreview() {
             float wy = (terrain_->tilepoints[rri * tw + cci].height - 8192.0f) * 0.25f + 5.0f;
             verts[i][0] = wx; verts[i][1] = wy; verts[i][2] = wz;
         }
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), verts);
-        glEnableVertexAttribArray(0);
-        glDrawArrays(GL_LINE_LOOP, 0, 5);
-        glDisableVertexAttribArray(0);
+        draw_verts(&verts[0][0], 5, (int)sizeof(verts[0]));
     } else {
         const int segs = 48;
         float verts[(segs + 1) * 3];
@@ -294,10 +305,7 @@ void TerrainEditWidget::drawBrushPreview() {
             verts[i * 3 + 1] = wy;
             verts[i * 3 + 2] = wz;
         }
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), verts);
-        glEnableVertexAttribArray(0);
-        glDrawArrays(GL_LINE_LOOP, 0, segs + 1);
-        glDisableVertexAttribArray(0);
+        draw_verts(verts, segs + 1, (int)(3 * sizeof(float)));
     }
 }
 

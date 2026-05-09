@@ -501,6 +501,7 @@ void TerrainRendererBase::createGPUBuffers() {
 
 void TerrainRendererBase::destroyGPUBuffers() {
     if (!isValid()) return;
+    if (vao_)               { glDeleteVertexArrays(1, &vao_);          vao_ = 0; }
     if (height_ssbo_)       { glDeleteBuffers(1, &height_ssbo_);       height_ssbo_ = 0; }
     if (cliff_level_ssbo_)  { glDeleteBuffers(1, &cliff_level_ssbo_);  cliff_level_ssbo_ = 0; }
     if (texture_data_ssbo_) { glDeleteBuffers(1, &texture_data_ssbo_); texture_data_ssbo_ = 0; }
@@ -581,6 +582,10 @@ void TerrainRendererBase::initializeGL() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    // Create dummy VAO — required in core profile for any draw call, even SSBO-based
+    glGenVertexArrays(1, &vao_);
+    glBindVertexArray(vao_);
+
     if (!initTerrainShaders())
         qWarning() << "TerrainRendererBase: terrain shader init failed!";
 }
@@ -614,6 +619,7 @@ QMatrix4x4 TerrainRendererBase::computeMVPMatrix(float aspect) const {
 
 void TerrainRendererBase::renderTerrain(const QMatrix4x4& mvp) {
     glUseProgram(program_);
+    glBindVertexArray(vao_);
     glUniformMatrix4fv(u_mvp_, 1, GL_FALSE, mvp.constData());
     glUniform2i(u_map_size_, terrain_->tile_width, terrain_->tile_height);
     glUniform2f(u_origin_, terrain_->center_offset_x, terrain_->center_offset_y);

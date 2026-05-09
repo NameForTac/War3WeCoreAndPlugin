@@ -142,6 +142,9 @@ protected:
     std::vector<int> layer_offsets_;
     std::vector<bool> tex_extended_;
 
+    // Dummy VAO for SSBO instanced rendering (core profile requires a bound VAO)
+    GLuint vao_ = 0;
+
     // Grid shader (used by both for optional grid)
     GLuint grid_program_ = 0;
     GLuint u_grid_mvp_ = 0;
