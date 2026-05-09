@@ -87,8 +87,8 @@
         <translation>就绪</translation>
     </message>
     <message>
-        <source>Loaded: %1 x %2 tiles</source>
-        <translation>已加载: %1 x %2 地块</translation>
+        <source>Loaded: %1 x %2 tiles | H: %3 ~ %4 (%5)</source>
+        <translation>已加载: %1 x %2 地块 | 高度: %3 ~ %4 (%5)</translation>
     </message>
     <message>
         <source>Terrain modified</source>

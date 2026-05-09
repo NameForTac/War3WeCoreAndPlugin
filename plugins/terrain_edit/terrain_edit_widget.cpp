@@ -26,8 +26,8 @@ uniform mat4 u_mvp;
 out vec3 v_color;
 out vec3 v_normal;
 out vec3 v_world_pos;
-out float v_tex0;
-out float v_tex1;
+flat out float v_tex0;
+flat out float v_tex1;
 out float v_blend;
 out vec2 v_tile_coord;
 void main() {
@@ -47,25 +47,19 @@ static const char* kTerrainFrag = R"(
 in vec3 v_color;
 in vec3 v_normal;
 in vec3 v_world_pos;
-in float v_tex0;
-in float v_tex1;
+flat in float v_tex0;
+flat in float v_tex1;
 in float v_blend;
 in vec2 v_tile_coord;
 uniform vec3 u_light_dir;
 uniform float u_lighting;
 uniform sampler2DArray u_tex_array;
 uniform float u_use_tex;
-uniform vec2 u_tile_grid;
 out vec4 frag_color;
 void main() {
     vec3 base_color = v_color;
     if (u_use_tex > 0.5) {
-        vec2 tile_floor = floor(v_tile_coord);
-        float variant = mod(tile_floor.x * 7.0 + tile_floor.y * 13.0,
-                            u_tile_grid.x * u_tile_grid.y);
-        float vx = mod(variant, u_tile_grid.x);
-        float vy = floor(variant / u_tile_grid.x);
-        vec2 uv = (fract(v_tile_coord) + vec2(vx, vy)) / u_tile_grid;
+        vec2 uv = v_tile_coord;
         vec3 c0 = texture(u_tex_array, vec3(uv, v_tex0)).rgb;
         vec3 c1 = texture(u_tex_array, vec3(uv, v_tex1)).rgb;
         base_color = mix(c0, c1, v_blend);
@@ -345,7 +339,7 @@ QImage TerrainEditWidget::generateTileTexture(const QString& tileId, int idx) {
         set(c.red(), c.green(), c.blue(), 40, 40, 40);
     }
 
-    return generateNoiseTexture(kTexSize_, kTexSize_, base, var, scale);
+    return generateNoiseTexture(tile_size_, tile_size_, base, var, scale);
 }
 
 // ============================================================
@@ -407,78 +401,105 @@ void TerrainEditWidget::uploadTextures() {
         return;
     }
 
-    // Pre-load all tile textures (try BLP from MPQ, fallback to procedural)
-    // WC3 terrain BLPs are 4×8 atlases of 32 sub-tile variants
-    int atlas_w = 256, atlas_h = 512;
-    std::vector<QImage> tile_images(tex_count_);
+    // Each tile type's BLP is a 4×8 (extended) or 4×4 atlas of sub-tiles.
+    // Split into 32 individual tile_size × tile_size sub-tiles and store
+    // as a flat GL_TEXTURE_2D_ARRAY so the fragment shader can sample
+    // the correct variant directly by layer index (no UV offsetting needed).
+    constexpr int kVariantsPerTile = 32;
+    constexpr int kGridCols = 8;
+    constexpr int kGridRows = 4;
+
+    std::vector<QImage> all_variants;
+    all_variants.reserve(tex_count_ * kVariantsPerTile);
+    layer_offsets_.resize(tex_count_);
+    tex_extended_.resize(tex_count_);
+    tile_size_ = 64; // default WC3 sub-tile size
+
+    auto pathMap = loadTilePathMap(builder_);
     int loaded_from_blp = 0;
 
-    // Build tileID → BLP path map from Terrain.slk (cached after first load)
-    auto pathMap = loadTilePathMap(builder_);
-
     for (int i = 0; i < tex_count_; ++i) {
+        layer_offsets_[i] = i * kVariantsPerTile;
+        bool got_blp = false;
+
         QString tileId = QString::fromStdString(terrain_->ground_tiles[i]);
         QString mpqPath;
         auto it = pathMap.find(tileId);
         if (it != pathMap.end()) mpqPath = it.value();
 
-        // 1) Try loading BLP from map MPQ first
+        // Try BLP from map MPQ, then WC3 MPQ
         if (builder_ && !mpqPath.isEmpty()) {
             std::vector<uint8_t> raw = builder_->read_raw(mpqPath.toStdString());
+            if (raw.empty())
+                raw = builder_->read_resource(mpqPath.toStdString());
             if (!raw.empty()) {
-                tile_images[i] = read_blp(raw)
-                    .scaled(atlas_w, atlas_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                    .convertToFormat(QImage::Format_RGB888);
-                if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
+                QImage blp = read_blp(raw).convertToFormat(QImage::Format_RGB888);
+                if (!blp.isNull()) {
+                    ++loaded_from_blp;
+                    got_blp = true;
+
+                    int w = blp.width(), h = blp.height();
+                    int sub_size = std::max(h / kGridRows, 1);
+                    int cols = std::min(w / sub_size, kGridCols);
+                    tile_size_ = std::max(tile_size_, sub_size);
+                    tex_extended_[i] = (cols > 4);
+
+                    // Extract sub-tiles from the atlas grid
+                    for (int vy = 0; vy < kGridRows; ++vy) {
+                        for (int vx = 0; vx < cols; ++vx) {
+                            all_variants.push_back(
+                                blp.copy(vx * sub_size, vy * sub_size, sub_size, sub_size)
+                                    .convertToFormat(QImage::Format_RGB888));
+                        }
+                    }
+                    // Pad to 32 by repeating for non-extended BLPs
+                    int have = (int)all_variants.size() - layer_offsets_[i];
+                    for (int j = have; j < kVariantsPerTile; ++j) {
+                        all_variants.push_back(all_variants[all_variants.size() - have]);
+                    }
+                }
             }
         }
 
-        // 2) Fallback to WC3 war3.mpq (via builder which has the Wc3Manager)
-        if (tile_images[i].isNull() && builder_ && !mpqPath.isEmpty()) {
-            std::vector<uint8_t> raw = builder_->read_resource(mpqPath.toStdString());
-            if (!raw.empty()) {
-                tile_images[i] = read_blp(raw)
-                    .scaled(atlas_w, atlas_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
-                    .convertToFormat(QImage::Format_RGB888);
-                if (!tile_images[i].isNull()) { ++loaded_from_blp; continue; }
-            }
-        }
-
-        // 3) Fallback: generate procedural texture (scale to atlas size)
-        tile_images[i] = generateTileTexture(tileId, i)
-            .scaled(atlas_w, atlas_h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        if (tile_images[i].isNull()) {
-            qWarning() << "[TerrainEdit] generated null texture for" << tileId;
-            tile_images[i] = QImage(atlas_w, atlas_h, QImage::Format_RGB888);
-            tile_images[i].fill(QColor(255, 0, 255));
+        if (!got_blp) {
+            tex_extended_[i] = false;
+            // Procedural fallback: generate at tile_size_ and repeat for all variants
+            QImage proc = generateTileTexture(tileId, i)
+                .scaled(tile_size_, tile_size_, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                .convertToFormat(QImage::Format_RGB888);
+            for (int j = 0; j < kVariantsPerTile; ++j)
+                all_variants.push_back(proc);
         }
     }
 
+    // Uniform size: scale any mismatched sub-tiles
+    for (auto& img : all_variants) {
+        if (img.width() != tile_size_ || img.height() != tile_size_) {
+            img = img.scaled(tile_size_, tile_size_, Qt::IgnoreAspectRatio,
+                             Qt::SmoothTransformation);
+        }
+    }
+
+    int total_layers = tex_count_ * kVariantsPerTile;
+
     qWarning().noquote()
-        << QStringLiteral("[TerrainEdit] Textures: %1/%2 from BLP, %3 procedural")
-               .arg(loaded_from_blp).arg(tex_count_).arg(tex_count_ - loaded_from_blp);
+        << QStringLiteral("[TerrainEdit] Textures: %1/%2 from BLP, %3 layers, %4px")
+               .arg(loaded_from_blp).arg(tex_count_)
+               .arg(total_layers).arg(tile_size_);
 
     glGenTextures(1, &tex_array_);
-
     glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
-    GLenum texErr = glGetError();
-    if (texErr != GL_NO_ERROR)
-        qWarning() << "[TerrainEdit] glBindTexture error:" << texErr;
 
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8, atlas_w, atlas_h, tex_count_,
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB8,
+                 tile_size_, tile_size_, total_layers,
                  0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-    texErr = glGetError();
-    if (texErr != GL_NO_ERROR)
-        qWarning() << "[TerrainEdit] glTexImage3D error:" << texErr;
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    for (int i = 0; i < tex_count_; ++i) {
-        if (tile_images[i].isNull()) continue;
-        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i,
-                        atlas_w, atlas_h, 1, GL_RGB, GL_UNSIGNED_BYTE, tile_images[i].bits());
-        texErr = glGetError();
-        if (texErr != GL_NO_ERROR)
-            qWarning() << "[TerrainEdit] glTexSubImage3D layer" << i << "error:" << texErr;
+    for (int layer = 0; layer < total_layers; ++layer) {
+        if (all_variants[layer].isNull()) continue;
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer,
+                        tile_size_, tile_size_, 1,
+                        GL_RGB, GL_UNSIGNED_BYTE, all_variants[layer].bits());
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
@@ -522,7 +543,6 @@ void TerrainEditWidget::initializeGL() {
             u_lighting_ = glGetUniformLocation(program_, "u_lighting");
             u_use_tex_ = glGetUniformLocation(program_, "u_use_tex");
             u_tex_array_ = glGetUniformLocation(program_, "u_tex_array");
-            u_tile_grid_ = glGetUniformLocation(program_, "u_tile_grid");
         }
     } else {
         qWarning() << "[TerrainEdit] Shader compilation failed!";
@@ -599,6 +619,38 @@ void TerrainEditWidget::buildMesh() {
             }
             if (sc == 0) secondary = primary; // all corners same
 
+            // 1-2-4-8 corner flag system for transition masks (WC3 standard):
+            // BL=1, BR=2, TL=4, TR=8. Sum the flags of corners that have each texture,
+            // use the sum as variant index into the atlas (left half 0-15 = transition
+            // masks, right half 16-31 = full-block tiles for all-same quads).
+            const int kQuadFlags[4] = {1, 2, 4, 8}; // BL, BR, TL, TR
+            auto calcVariant = [&](int tex) -> int {
+                if (tex < 0 || tex >= (int)tex_extended_.size()) return 0;
+                int sum = 0;
+                for (int c = 0; c < 4; ++c)
+                    if (corner_tex[c] == (uint8_t)tex) sum += kQuadFlags[c];
+                if (sum == 15) { // all 4 corners have this texture → full-block tile
+                    if (tex_extended_[tex]) {
+                        int var = 0;
+                        for (int c = 0; c < 4; ++c) {
+                            if (corner_tex[c] == (uint8_t)tex) {
+                                int idx = cr[c] * cols + cc[c];
+                                var = terrain_->tilepoints[idx].texture_detail & 0x1F;
+                                break;
+                            }
+                        }
+                        return 16 + (var & 15);
+                    }
+                    return 0; // non-extended: sub-tile 0
+                }
+                return sum; // transition mask index 0-14
+            };
+            int v0 = calcVariant(primary);
+            // For secondary: when not used (all same), mirror primary variant
+            int v1 = (secondary == primary) ? v0 : calcVariant(secondary);
+            int layer0 = layer_offsets_[primary]   + v0;
+            int layer1 = layer_offsets_[secondary] + v1;
+
             int base = (int)vertices.size();
 
             for (int c = 0; c < 4; ++c) {
@@ -627,8 +679,8 @@ void TerrainEditWidget::buildMesh() {
                     wx, wy, wz,
                     (float)cv.redF(), (float)cv.greenF(), (float)cv.blueF(),
                     -dx / len, 1.0f / len, -dz / len,
-                    (float)primary, (float)secondary, blend,
-                    (float)col, (float)row
+                    (float)layer0, (float)layer1, blend,
+                    (float)(c & 1), (float)(c >> 1)
                 });
             }
 
@@ -838,7 +890,6 @@ void TerrainEditWidget::paintGL() {
     }
 
     glUniform1f(u_use_tex_, useTex ? 1.0f : 0.0f);
-    glUniform2f(u_tile_grid_, 4.0f, 8.0f);
     if (tex_array_) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex_array_);
