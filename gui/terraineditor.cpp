@@ -6,6 +6,8 @@
 #include <QPainter>
 #include <QtMath>
 #include <QApplication>
+#include <QFile>
+#include <QDir>
 #include <algorithm>
 #include <cmath>
 
@@ -309,17 +311,41 @@ QImage TerrainWidget::generate_tile_texture(const QString& tileId, int idx) {
 // ============================================================
 // Texture loading from WC3 MPQ
 // ============================================================
+// Try to load file from local Data/ directory (relative to exe or CWD)
+static std::vector<uint8_t> read_local_slk(const char* filename) {
+    QStringList candidates = {
+        QCoreApplication::applicationDirPath() + "/../../Data/" + filename,
+        QCoreApplication::applicationDirPath() + "/../Data/" + filename,
+        QCoreApplication::applicationDirPath() + "/Data/" + filename,
+        QDir::currentPath() + "/Data/" + filename,
+    };
+    for (auto& path : candidates) {
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly)) {
+            auto bytes = f.readAll();
+            f.close();
+            qWarning().noquote() << "[TerrainWidget] Loaded" << filename << "from" << path;
+            return {bytes.begin(), bytes.end()};
+        }
+    }
+    return {};
+}
+
+// Load tile → path mapping from Terrain.slk in local Data/ or WC3 MPQ.
+// Cache the map globally so we only parse once.
 static QHash<QString, QString> load_tile_path_map(MapBuilder* builder) {
     static QHash<QString, QString> s_cache;
     static bool s_tried = false;
     if (s_tried) return s_cache;
     s_tried = true;
-    if (!builder) return s_cache;
 
-    // Try both backslash and forward slash paths
-    auto data = builder->read_resource("TerrainArt\\Terrain.slk");
-    if (data.empty())
-        data = builder->read_resource("TerrainArt/Terrain.slk");
+    std::vector<uint8_t> data = read_local_slk("Terrain.slk");
+    if (data.empty() && builder) {
+        // Try both backslash and forward slash paths
+        data = builder->read_resource("TerrainArt\\Terrain.slk");
+        if (data.empty())
+            data = builder->read_resource("TerrainArt/Terrain.slk");
+    }
     if (data.empty())
         return s_cache;
 

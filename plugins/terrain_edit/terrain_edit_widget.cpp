@@ -7,6 +7,8 @@
 #include <QDebug>
 #include <QtMath>
 #include <QApplication>
+#include <QFile>
+#include <QDir>
 #include <algorithm>
 #include <cmath>
 
@@ -346,17 +348,39 @@ QImage TerrainEditWidget::generateTileTexture(const QString& tileId, int idx) {
 // Tile ID → BLP path in MPQ, via Terrain.slk
 // ============================================================
 
-// Load tile → path mapping from Terrain.slk in WC3 MPQ.
+// Try to load file from local Data/ directory (relative to exe or CWD)
+static std::vector<uint8_t> readLocalSlk(const char* filename) {
+    QStringList candidates = {
+        QCoreApplication::applicationDirPath() + "/../../Data/" + filename,
+        QCoreApplication::applicationDirPath() + "/../Data/" + filename,
+        QCoreApplication::applicationDirPath() + "/Data/" + filename,
+        QDir::currentPath() + "/Data/" + filename,
+    };
+    for (auto& path : candidates) {
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly)) {
+            auto bytes = f.readAll();
+            f.close();
+            qWarning().noquote() << "[TerrainEdit] Loaded" << filename << "from" << path;
+            return {bytes.begin(), bytes.end()};
+        }
+    }
+    return {};
+}
+
+// Load tile → path mapping from Terrain.slk in local Data/ or WC3 MPQ.
 // Cache the map globally so we only parse once.
 static QHash<QString, QString> loadTilePathMap(MapBuilder* builder) {
     static QHash<QString, QString> s_cache;
     static bool s_tried = false;
     if (s_tried) return s_cache;
     s_tried = true;
-    if (!builder) return s_cache;
 
-    auto data = builder->read_resource("TerrainArt\\Terrain.slk");
-    if (data.empty()) return s_cache;
+    std::vector<uint8_t> data = readLocalSlk("Terrain.slk");
+    if (data.empty() && builder)
+        data = builder->read_resource("TerrainArt\\Terrain.slk");
+    if (data.empty())
+        return s_cache;
 
     std::string text(data.begin(), data.end());
     auto table = slk::parse(text);
