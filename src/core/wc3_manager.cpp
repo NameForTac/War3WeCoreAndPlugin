@@ -79,12 +79,15 @@ bool Wc3Manager::load_stormlib() {
                 (unsigned)GetLastError());
         return false;
     }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
     SFileOpenArchive_  = (bool (*)(const char*, uint32_t, uint32_t, void**))GetProcAddress((HMODULE)storm_lib_, "SFileOpenArchive");
     SFileOpenFileEx_   = (bool (*)(void*, const char*, uint32_t, void**))      GetProcAddress((HMODULE)storm_lib_, "SFileOpenFileEx");
     SFileGetFileSize_  = (uint32_t (*)(void*, uint32_t*))                      GetProcAddress((HMODULE)storm_lib_, "SFileGetFileSize");
     SFileReadFile_     = (bool (*)(void*, void*, uint32_t, uint32_t*, void*))  GetProcAddress((HMODULE)storm_lib_, "SFileReadFile");
     SFileCloseArchive_ = (bool (*)(void*))                                      GetProcAddress((HMODULE)storm_lib_, "SFileCloseArchive");
     SFileCloseFile_    = (bool (*)(void*))                                      GetProcAddress((HMODULE)storm_lib_, "SFileCloseFile");
+#pragma GCC diagnostic pop
     bool ok = (SFileOpenArchive_ && SFileOpenFileEx_ && SFileGetFileSize_ &&
                SFileReadFile_ && SFileCloseArchive_ && SFileCloseFile_);
     if (!ok) {

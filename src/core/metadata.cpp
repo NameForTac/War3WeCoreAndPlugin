@@ -241,7 +241,7 @@ void MetaDataDB::load_fields_from_slk(const std::string& path, ObjectFileType ty
     int col_min     = col_idx("minval");
     int col_max     = col_idx("maxval");
     int col_default = col_idx("defaultval");
-    int col_display = col_idx("displayname");
+    [[maybe_unused]] int col_display = col_idx("displayname");
 
     if (col_id < 0)
         return;

@@ -27,9 +27,6 @@ struct SoundDef {
     float unknown_e = 0;
     float unknown_f = 0;
     float unknown_g = 0;
-
-    // Sentinel value for unset floats
-    static constexpr float SENTINEL = 1330004544.0f; // 0x4F800000
 };
 
 struct Sounds {

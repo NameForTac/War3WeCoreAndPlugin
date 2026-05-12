@@ -436,8 +436,7 @@ bool MapBuilder::save(const std::string& output_path, const BuildSettings& setti
     if (impl_->units_cache) file_count++;
     if (impl_->doodads_cache) file_count++;
     if (impl_->wts_cache) file_count++;
-    for (auto& [name, _] : impl_->object_cache)
-        file_count++;
+    file_count += static_cast<int32_t>(impl_->object_cache.size());
 
     // Create output archive
     Archive archive;
