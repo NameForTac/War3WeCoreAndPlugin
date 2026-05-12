@@ -10,6 +10,11 @@
 #include "imp.h"
 #include "wts.h"
 #include "slk.h"
+#include "wpm.h"
+#include "shd.h"
+#include "w3s.h"
+#include "wct.h"
+#include "wtg.h"
 
 #include <functional>
 #include <memory>
@@ -64,6 +69,12 @@ public:
     int64_t                 file_size(const std::string& file_name);
     std::vector<std::string> list_files();
 
+    PathingMap          read_wpm();
+    ShadowMap           read_shd(int32_t width, int32_t height);
+    Sounds              read_w3s();
+    CustomTextTriggers  read_wct();
+    TriggerData         read_wtg();
+
     // --- Modify ---
     void set_w3i(const MapInfo& info);
     void set_terrain(const Terrain& terrain);
@@ -71,6 +82,11 @@ public:
     void set_placed_doodads(const PlacedDoodads& doodads);
     void set_object(const std::string& file_name, const ObjectFile& obj);
     void set_wts(const WTS& table);
+    void set_wpm(const PathingMap& pm);
+    void set_shd(const ShadowMap& sm);
+    void set_w3s(const Sounds& sounds);
+    void set_wct(const CustomTextTriggers& ctt);
+    void set_wtg(const TriggerData& td);
     void set_file(const std::string& name, std::vector<uint8_t> data);
     void remove_file(const std::string& name);
 

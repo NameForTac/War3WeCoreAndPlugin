@@ -7,6 +7,11 @@
 #include "doo.h"
 #include "units_doo.h"
 #include "imp.h"
+#include "wpm.h"
+#include "shd.h"
+#include "w3s.h"
+#include "wct.h"
+#include "wtg.h"
 #include <map>
 #include <unordered_map>
 #include <optional>
@@ -198,6 +203,39 @@ WTS MapBuilder::read_wts() {
     return table;
 }
 
+PathingMap MapBuilder::read_wpm() {
+    auto data = impl_->source->read_file("war3map.wpm");
+    Buffer buf(std::move(data));
+    return wpm::read(buf);
+}
+
+ShadowMap MapBuilder::read_shd(int32_t width, int32_t height) {
+    auto data = impl_->source->read_file("war3map.shd");
+    Buffer buf(std::move(data));
+    return shd::read(buf, width, height);
+}
+
+Sounds MapBuilder::read_w3s() {
+    auto data = impl_->source->read_file("war3map.w3s");
+    if (data.empty()) return {};
+    Buffer buf(std::move(data));
+    return w3s::read(buf);
+}
+
+CustomTextTriggers MapBuilder::read_wct() {
+    auto data = impl_->source->read_file("war3map.wct");
+    if (data.empty()) return {};
+    Buffer buf(std::move(data));
+    return wct::read(buf);
+}
+
+TriggerData MapBuilder::read_wtg() {
+    auto data = impl_->source->read_file("war3map.wtg");
+    if (data.empty()) return {};
+    Buffer buf(std::move(data));
+    return wtg::read(buf);
+}
+
 SLKTable MapBuilder::read_slk(const std::string& file_name) {
     auto data = impl_->source->read_file(file_name);
     std::string text(data.begin(), data.end());
@@ -238,6 +276,36 @@ void MapBuilder::set_object(const std::string& file_name, const ObjectFile& obj)
 
 void MapBuilder::set_wts(const WTS& table) {
     impl_->wts_cache = table;
+}
+
+void MapBuilder::set_wpm(const PathingMap& pm) {
+    Buffer buf;
+    wpm::write(buf, pm);
+    impl_->file_overrides["war3map.wpm"] = buf.take_data();
+}
+
+void MapBuilder::set_shd(const ShadowMap& sm) {
+    Buffer buf;
+    shd::write(buf, sm);
+    impl_->file_overrides["war3map.shd"] = buf.take_data();
+}
+
+void MapBuilder::set_w3s(const Sounds& sounds) {
+    Buffer buf;
+    w3s::write(buf, sounds);
+    impl_->file_overrides["war3map.w3s"] = buf.take_data();
+}
+
+void MapBuilder::set_wct(const CustomTextTriggers& ctt) {
+    Buffer buf;
+    wct::write(buf, ctt);
+    impl_->file_overrides["war3map.wct"] = buf.take_data();
+}
+
+void MapBuilder::set_wtg(const TriggerData& td) {
+    Buffer buf;
+    wtg::write(buf, td);
+    impl_->file_overrides["war3map.wtg"] = buf.take_data();
 }
 
 void MapBuilder::set_file(const std::string& name, std::vector<uint8_t> data) {
