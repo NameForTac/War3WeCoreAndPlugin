@@ -56,6 +56,9 @@ add_library(w3x_core STATIC
   src/core/w3s.cpp
   src/core/wct.cpp
   src/core/wtg.cpp
+  src/core/ini.cpp
+  src/core/wai.cpp
+  src/core/w3f.cpp
   src/core/map_builder.cpp
   src/core/metadata.cpp
   src/core/object_id_gen.cpp

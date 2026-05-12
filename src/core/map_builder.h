@@ -15,6 +15,9 @@
 #include "w3s.h"
 #include "wct.h"
 #include "wtg.h"
+#include "ini.h"
+#include "wai.h"
+#include "w3f.h"
 
 #include <functional>
 #include <memory>
@@ -74,6 +77,10 @@ public:
     Sounds              read_w3s();
     CustomTextTriggers  read_wct();
     TriggerData         read_wtg();
+    std::string         read_jass();
+    INIFile             read_ini(const std::string& file_name);
+    AIFile              read_wai();
+    CampaignInfo        read_w3f();
 
     // --- Modify ---
     void set_w3i(const MapInfo& info);
@@ -87,6 +94,10 @@ public:
     void set_w3s(const Sounds& sounds);
     void set_wct(const CustomTextTriggers& ctt);
     void set_wtg(const TriggerData& td);
+    void set_jass(const std::string& script);
+    void set_ini(const std::string& file_name, const INIFile& ini);
+    void set_wai(const AIFile& ai);
+    void set_w3f(const CampaignInfo& ci);
     void set_file(const std::string& name, std::vector<uint8_t> data);
     void remove_file(const std::string& name);
 

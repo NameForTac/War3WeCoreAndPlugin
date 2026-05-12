@@ -12,6 +12,9 @@
 #include "w3s.h"
 #include "wct.h"
 #include "wtg.h"
+#include "ini.h"
+#include "wai.h"
+#include "w3f.h"
 #include <map>
 #include <unordered_map>
 #include <optional>
@@ -236,6 +239,31 @@ TriggerData MapBuilder::read_wtg() {
     return wtg::read(buf);
 }
 
+std::string MapBuilder::read_jass() {
+    auto data = impl_->source->read_file("war3map.j");
+    return std::string(data.begin(), data.end());
+}
+
+INIFile MapBuilder::read_ini(const std::string& file_name) {
+    auto data = impl_->source->read_file(file_name);
+    std::string text(data.begin(), data.end());
+    return ini::parse(text);
+}
+
+AIFile MapBuilder::read_wai() {
+    auto data = impl_->source->read_file("war3map.wai");
+    if (data.empty()) return {};
+    Buffer buf(std::move(data));
+    return wai::read(buf);
+}
+
+CampaignInfo MapBuilder::read_w3f() {
+    auto data = impl_->source->read_file("war3campaign.w3f");
+    if (data.empty()) return {};
+    Buffer buf(std::move(data));
+    return w3f::read(buf);
+}
+
 SLKTable MapBuilder::read_slk(const std::string& file_name) {
     auto data = impl_->source->read_file(file_name);
     std::string text(data.begin(), data.end());
@@ -306,6 +334,29 @@ void MapBuilder::set_wtg(const TriggerData& td) {
     Buffer buf;
     wtg::write(buf, td);
     impl_->file_overrides["war3map.wtg"] = buf.take_data();
+}
+
+void MapBuilder::set_jass(const std::string& script) {
+    std::vector<uint8_t> data(script.begin(), script.end());
+    impl_->file_overrides["war3map.j"] = std::move(data);
+}
+
+void MapBuilder::set_ini(const std::string& file_name, const INIFile& ini_file) {
+    auto text = ini::generate(ini_file);
+    std::vector<uint8_t> data(text.begin(), text.end());
+    impl_->file_overrides[file_name] = std::move(data);
+}
+
+void MapBuilder::set_wai(const AIFile& ai) {
+    Buffer buf;
+    wai::write(buf, ai);
+    impl_->file_overrides["war3map.wai"] = buf.take_data();
+}
+
+void MapBuilder::set_w3f(const CampaignInfo& ci) {
+    Buffer buf;
+    w3f::write(buf, ci);
+    impl_->file_overrides["war3campaign.w3f"] = buf.take_data();
 }
 
 void MapBuilder::set_file(const std::string& name, std::vector<uint8_t> data) {
